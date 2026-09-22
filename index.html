@@ -267,12 +267,6 @@
       color: var(--paper-faint);
       margin-top: 5px;
     }
-    .campo-recordatorio {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .campo-recordatorio label { margin: 0; }
     .subtabs {
       display: flex;
       gap: 6px;
@@ -465,7 +459,7 @@
           <div class="field"><label>Categoría</label><select id="gasto-categoria" required></select></div>
           <div class="field"><label>Descripción</label><input type="text" id="gasto-descripcion" placeholder="Mercado, Uber, arriendo..." required></div>
           <div class="field"><label>Monto</label><input type="number" id="gasto-monto" placeholder="0" step="any" required></div>
-          <div class="field"><label>¿De qué cuenta o bolsillo salió?</label><select id="gasto-cuenta"></select></div>
+          <div class="field"><label>¿De qué cuenta o bolsillo salió? *</label><select id="gasto-cuenta" required></select></div>
           <button type="submit" class="primario">Guardar gasto</button>
           <div class="msg" id="msg-gasto"></div>
         </form>
@@ -477,7 +471,7 @@
           <div class="field"><label>Fecha</label><input type="date" id="ingreso-fecha" required></div>
           <div class="field"><label>Descripción</label><input type="text" id="ingreso-descripcion" placeholder="Trabajo extra, venta..." required></div>
           <div class="field"><label>Monto</label><input type="number" id="ingreso-monto" placeholder="0" step="any" required></div>
-          <div class="field"><label>¿A qué cuenta entró?</label><select id="ingreso-cuenta"></select></div>
+          <div class="field"><label>¿A qué cuenta entró? *</label><select id="ingreso-cuenta" required></select></div>
           <button type="submit" class="primario">Guardar ingreso</button>
           <div class="msg" id="msg-ingreso"></div>
         </form>
@@ -530,14 +524,6 @@
             <div class="field"><label>Descripción</label><input type="text" id="deuda-descripcion" placeholder="Tarjeta, préstamo, cuota..." required></div>
             <div class="field"><label>Monto</label><input type="number" id="deuda-monto" placeholder="0" step="any" required></div>
             <div class="field"><label>Fecha límite (opcional)</label><input type="date" id="deuda-fecha"></div>
-            <div class="field campo-recordatorio">
-              <input type="checkbox" id="deuda-recordatorio">
-              <label for="deuda-recordatorio">Avisarme por correo antes de que venza</label>
-            </div>
-            <div class="field" id="campo-dias-antes" style="display:none;">
-              <label>Días de anticipación</label>
-              <input type="number" id="deuda-dias-antes" value="3" min="0" step="1">
-            </div>
             <button type="submit" class="primario">Guardar deuda</button>
             <div class="msg" id="msg-deuda"></div>
           </form>
@@ -557,14 +543,6 @@
             <div class="field"><label>Descripción</label><input type="text" id="cobrar-descripcion" placeholder="Préstamo, favor, venta..." required></div>
             <div class="field"><label>Monto</label><input type="number" id="cobrar-monto" placeholder="0" step="any" required></div>
             <div class="field"><label>Fecha límite (opcional)</label><input type="date" id="cobrar-fecha"></div>
-            <div class="field campo-recordatorio">
-              <input type="checkbox" id="cobrar-recordatorio">
-              <label for="cobrar-recordatorio">Avisarme por correo antes de la fecha</label>
-            </div>
-            <div class="field" id="campo-dias-antes-cobrar" style="display:none;">
-              <label>Días de anticipación</label>
-              <input type="number" id="cobrar-dias-antes" value="3" min="0" step="1">
-            </div>
             <button type="submit" class="primario">Guardar</button>
             <div class="msg" id="msg-por-cobrar"></div>
           </form>
@@ -868,16 +846,15 @@
         return {
           id: d.id, fecha: d.fecha_vencimiento || '', descripcion: d.descripcion,
           monto, montoPagado, pendiente: Math.max(monto - montoPagado, 0),
-          recordatorio: !!d.recordatorio, diasAntes: Number(d.dias_antes) || 3, pagada: !!d.pagada
+          pagada: !!d.pagada
         };
       });
       return ordenarPendientesPrimero_(lista, 'fecha', 'pagada');
     }
 
-    async function agregarDeuda(descripcion, monto, fecha, recordatorio, diasAntes) {
+    async function agregarDeuda(descripcion, monto, fecha) {
       const { error } = await sb.from('deudas').insert({
         fecha_vencimiento: fecha || null, descripcion, monto: Number(monto) || 0,
-        recordatorio: !!recordatorio && !!fecha, dias_antes: diasAntes ? Number(diasAntes) : 3,
         pagada: false, monto_pagado: 0
       });
       if (error) throw error;
@@ -917,18 +894,16 @@
         return {
           id: c.id, nombre: c.nombre, descripcion: c.descripcion,
           monto, montoCobrado, pendiente: Math.max(monto - montoCobrado, 0),
-          fecha: c.fecha_limite || '', recordatorio: !!c.recordatorio,
-          diasAntes: Number(c.dias_antes) || 3, cobrada: !!c.cobrada
+          fecha: c.fecha_limite || '', cobrada: !!c.cobrada
         };
       });
       return ordenarPendientesPrimero_(lista, 'fecha', 'cobrada');
     }
 
-    async function agregarPorCobrar(nombre, descripcion, monto, fecha, recordatorio, diasAntes) {
+    async function agregarPorCobrar(nombre, descripcion, monto, fecha) {
       const { error } = await sb.from('por_cobrar').insert({
         nombre: (nombre || '').trim(), descripcion, monto: Number(monto) || 0,
-        fecha_limite: fecha || null, recordatorio: !!recordatorio && !!fecha,
-        dias_antes: diasAntes ? Number(diasAntes) : 3, cobrada: false, monto_cobrado: 0
+        fecha_limite: fecha || null, cobrada: false, monto_cobrado: 0
       });
       if (error) throw error;
       return { ok: true, porCobrar: await getPorCobrar() };
@@ -1109,10 +1084,6 @@
     }
 
     // ---------- Deudas (Debo) ----------
-    document.getElementById('deuda-recordatorio').addEventListener('change', e => {
-      document.getElementById('campo-dias-antes').style.display = e.target.checked ? 'block' : 'none';
-    });
-
     function renderDeudas(lista) {
       const cont = document.getElementById('lista-deudas');
       cont.innerHTML = '';
@@ -1131,7 +1102,7 @@
         const infoDiv = document.createElement('div');
         infoDiv.innerHTML = `
           <div class="mov-desc">${d.descripcion}${d.pagada ? ' ✓' : ''}</div>
-          <div class="mov-meta">${fechaTxt}${d.recordatorio ? ' · 🔔 ' + d.diasAntes + ' día(s) antes' : ''}${d.montoPagado > 0 && !d.pagada ? ' · abonado ' + formatoMoneda(d.montoPagado) : ''}</div>
+          <div class="mov-meta">${fechaTxt}${d.montoPagado > 0 && !d.pagada ? ' · abonado ' + formatoMoneda(d.montoPagado) : ''}</div>
         `;
 
         const accionesDiv = document.createElement('div');
@@ -1191,10 +1162,12 @@
       const selectCuenta = document.createElement('select');
       selectCuenta.className = 'mono';
       selectCuenta.style.cssText = 'background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.78rem; padding:4px 2px; margin-top:6px;';
-      const opSinCuenta = document.createElement('option');
-      opSinCuenta.value = '';
-      opSinCuenta.textContent = 'Sin cuenta específica';
-      selectCuenta.appendChild(opSinCuenta);
+      const opPlaceholder = document.createElement('option');
+      opPlaceholder.value = '';
+      opPlaceholder.disabled = true;
+      opPlaceholder.selected = true;
+      opPlaceholder.textContent = (datos.cuentas || []).length ? 'Selecciona una cuenta' : 'Primero crea una cuenta';
+      selectCuenta.appendChild(opPlaceholder);
       (datos.cuentas || []).forEach(c => {
         const op = document.createElement('option');
         op.value = c.id;
@@ -1212,6 +1185,7 @@
       btnConfirmar.addEventListener('click', async () => {
         const monto = Number(inputMonto.value) || 0;
         if (monto <= 0) { mostrarMensaje('msg-deuda', 'Pon un monto mayor a cero', 'error'); return; }
+        if (!selectCuenta.value) { mostrarMensaje('msg-deuda', 'Selecciona de qué cuenta sale el abono', 'error'); return; }
         try {
           const res = await abonarDeuda(deuda.id, monto, selectCuenta.value);
           datos.deudas = res.deudas;
@@ -1242,29 +1216,18 @@
       const descripcion = document.getElementById('deuda-descripcion').value;
       const monto = document.getElementById('deuda-monto').value;
       const fecha = document.getElementById('deuda-fecha').value;
-      const recordatorio = document.getElementById('deuda-recordatorio').checked;
-      const diasAntes = document.getElementById('deuda-dias-antes').value;
-
-      if (recordatorio && !fecha) {
-        mostrarMensaje('msg-deuda', 'Para el recordatorio necesitas poner una fecha límite', 'error');
-        return;
-      }
 
       try {
-        const res = await agregarDeuda(descripcion, monto, fecha, recordatorio, diasAntes);
+        const res = await agregarDeuda(descripcion, monto, fecha);
         datos.deudas = res.deudas;
         renderDeudas(res.deudas);
         cargarResumenDeMes(mesSeleccionado);
         mostrarMensaje('msg-deuda', 'Deuda guardada', 'ok');
         e.target.reset();
-        document.getElementById('campo-dias-antes').style.display = 'none';
       } catch (err) { mostrarMensaje('msg-deuda', err.message, 'error'); }
     });
 
     // ---------- Me deben (PorCobrar) ----------
-    document.getElementById('cobrar-recordatorio').addEventListener('change', e => {
-      document.getElementById('campo-dias-antes-cobrar').style.display = e.target.checked ? 'block' : 'none';
-    });
 
     function renderPorCobrar(lista) {
       const cont = document.getElementById('lista-por-cobrar');
@@ -1284,7 +1247,7 @@
         const infoDiv = document.createElement('div');
         infoDiv.innerHTML = `
           <div class="mov-desc">🤝 ${c.nombre}${c.cobrada ? ' ✓' : ''}</div>
-          <div class="mov-meta">${c.descripcion} · ${fechaTxt}${c.recordatorio ? ' · 🔔 ' + c.diasAntes + ' día(s) antes' : ''}${c.montoCobrado > 0 && !c.cobrada ? ' · abonado ' + formatoMoneda(c.montoCobrado) : ''}</div>
+          <div class="mov-meta">${c.descripcion} · ${fechaTxt}${c.montoCobrado > 0 && !c.cobrada ? ' · abonado ' + formatoMoneda(c.montoCobrado) : ''}</div>
         `;
 
         const accionesDiv = document.createElement('div');
@@ -1344,10 +1307,12 @@
       const select = document.createElement('select');
       select.className = 'mono';
       select.style.cssText = 'background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.78rem; padding:4px 2px; margin-top:6px;';
-      const opSinCuenta = document.createElement('option');
-      opSinCuenta.value = '';
-      opSinCuenta.textContent = 'Sin cuenta específica';
-      select.appendChild(opSinCuenta);
+      const opPlaceholder = document.createElement('option');
+      opPlaceholder.value = '';
+      opPlaceholder.disabled = true;
+      opPlaceholder.selected = true;
+      opPlaceholder.textContent = (datos.cuentas || []).length ? 'Selecciona una cuenta' : 'Primero crea una cuenta';
+      select.appendChild(opPlaceholder);
       (datos.cuentas || []).forEach(c => {
         const op = document.createElement('option');
         op.value = c.id;
@@ -1365,6 +1330,7 @@
       btnConfirmar.addEventListener('click', async () => {
         const monto = Number(inputMonto.value) || 0;
         if (monto <= 0) { mostrarMensaje('msg-por-cobrar', 'Pon un monto mayor a cero', 'error'); return; }
+        if (!select.value) { mostrarMensaje('msg-por-cobrar', 'Selecciona a qué cuenta entra el abono', 'error'); return; }
         try {
           const res = await abonarCobro(cobro.id, monto, select.value);
           datos.porCobrar = res.porCobrar;
@@ -1396,22 +1362,14 @@
       const descripcion = document.getElementById('cobrar-descripcion').value;
       const monto = document.getElementById('cobrar-monto').value;
       const fecha = document.getElementById('cobrar-fecha').value;
-      const recordatorio = document.getElementById('cobrar-recordatorio').checked;
-      const diasAntes = document.getElementById('cobrar-dias-antes').value;
-
-      if (recordatorio && !fecha) {
-        mostrarMensaje('msg-por-cobrar', 'Para el recordatorio necesitas poner una fecha límite', 'error');
-        return;
-      }
 
       try {
-        const res = await agregarPorCobrar(nombre, descripcion, monto, fecha, recordatorio, diasAntes);
+        const res = await agregarPorCobrar(nombre, descripcion, monto, fecha);
         datos.porCobrar = res.porCobrar;
         renderPorCobrar(res.porCobrar);
         renderCuentas(datos.cuentas);
         mostrarMensaje('msg-por-cobrar', 'Cobro pendiente guardado', 'ok');
         e.target.reset();
-        document.getElementById('campo-dias-antes-cobrar').style.display = 'none';
       } catch (err) { mostrarMensaje('msg-por-cobrar', err.message, 'error'); }
     });
 
@@ -1555,17 +1513,21 @@
         if (!sel) return;
         const valorPrevio = sel.value;
         sel.innerHTML = '';
-        const opSinCuenta = document.createElement('option');
-        opSinCuenta.value = '';
-        opSinCuenta.textContent = 'Sin cuenta específica';
-        sel.appendChild(opSinCuenta);
+        const opPlaceholder = document.createElement('option');
+        opPlaceholder.value = '';
+        opPlaceholder.disabled = true;
+        opPlaceholder.selected = true;
+        opPlaceholder.textContent = (datos.cuentas || []).length
+          ? 'Selecciona una cuenta'
+          : 'Primero crea una cuenta en "Cuentas"';
+        sel.appendChild(opPlaceholder);
         (datos.cuentas || []).forEach(c => {
           const op = document.createElement('option');
           op.value = c.id;
           op.textContent = c.nombre;
           sel.appendChild(op);
         });
-        if ([...sel.options].some(o => o.value === valorPrevio)) sel.value = valorPrevio;
+        if ([...sel.options].some(o => o.value === valorPrevio && valorPrevio !== '')) sel.value = valorPrevio;
       });
     }
 
@@ -1594,6 +1556,12 @@
       const descripcion = document.getElementById('gasto-descripcion').value;
       const monto = document.getElementById('gasto-monto').value;
       const cuentaId = document.getElementById('gasto-cuenta').value;
+      if (!cuentaId) {
+        mostrarMensaje('msg-gasto', (datos.cuentas || []).length
+          ? 'Selecciona de qué cuenta salió'
+          : 'Primero crea una cuenta en la pestaña Cuentas', 'error');
+        return;
+      }
       try {
         const res = await agregarGasto(fecha, categoria, descripcion, monto, cuentaId);
         document.activeElement.blur();
@@ -1616,6 +1584,12 @@
       const descripcion = document.getElementById('ingreso-descripcion').value;
       const monto = document.getElementById('ingreso-monto').value;
       const cuentaId = document.getElementById('ingreso-cuenta').value;
+      if (!cuentaId) {
+        mostrarMensaje('msg-ingreso', (datos.cuentas || []).length
+          ? 'Selecciona a qué cuenta entró'
+          : 'Primero crea una cuenta en la pestaña Cuentas', 'error');
+        return;
+      }
       try {
         const res = await agregarIngreso(fecha, descripcion, monto, 'Extra', cuentaId);
         document.activeElement.blur();
