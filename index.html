@@ -19,7 +19,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
   <style>
     /* -------- Paleta: tonos neutros / tierra, con tema claro y oscuro -------- */
     :root[data-tema="oscuro"] {
@@ -91,6 +91,13 @@
       border-radius: 6px;
       object-fit: contain;
       background: #fff;
+    }
+    .brand-name {
+      font-family: 'Cinzel', serif;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 700;
+      font-size: 1em;
     }
     .brand-derecha {
       display: flex;
@@ -494,7 +501,7 @@
 
   <header class="masthead">
     <div class="brand-row">
-      <span class="brand"><img src="icon.png" alt="" class="brand-logo"> Vigía</span>
+      <span class="brand"><img src="icon.png" alt="" class="brand-logo"> <span class="brand-name">Vigía</span></span>
       <div class="brand-derecha">
         <span class="period" id="fecha-actual"></span>
         <button id="btn-tema" class="btn-tema" type="button" aria-label="Cambiar tema" title="Cambiar tema"><svg class="ico"><use href="#i-moon"/></svg></button>
