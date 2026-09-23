@@ -187,6 +187,13 @@
       margin: 0 0 14px;
       color: var(--paper);
     }
+    .block-header-fila {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .block-header-fila h2 { margin-bottom: 0; }
 
     /* ---------- Category bars ---------- */
     .bar-row { margin-bottom: 13px; }
@@ -557,7 +564,10 @@
       </div>
 
       <div class="block">
-        <h2><svg class="ico"><use href="#i-clock"/></svg> Movimientos recientes</h2>
+        <div class="block-header-fila">
+          <h2><svg class="ico"><use href="#i-clock"/></svg> Movimientos recientes</h2>
+          <button id="btn-editar-movimientos" type="button" class="btn-mini">Editar</button>
+        </div>
         <div id="lista-movimientos"></div>
       </div>
     </section>
@@ -698,6 +708,7 @@
 
     let datos = null;
     let mesSeleccionado = null; // 'YYYY-MM' del mes que se está mostrando en Resumen
+    let modoEdicionMovimientos = false; // controla si se ven los botones Editar/Eliminar en cada fila
     const paletaCategorias = ['#707070', '#8C8C8C', '#5A5A5A', '#A3A3A3', '#454545', '#B8B8B8'];
     const iconosCategorias = {
       'Gastos de la casa': 'i-home',
@@ -790,6 +801,76 @@
       await sb.from('cuentas').update({ saldo: nuevoSaldo, actualizado: new Date().toISOString() }).eq('id', id);
     }
 
+    /* =========================================================
+     * NOTIFICACIONES LOCALES — solo funcionan dentro de la app de
+     * Capacitor (necesitan el plugin @capacitor/local-notifications,
+     * que habla directo con Android). En la versión de PWABuilder/TWA
+     * o en un navegador normal, window.Capacitor no existe, así que
+     * estas funciones no hacen nada — no rompen nada tampoco.
+     * ========================================================= */
+
+    function tieneNotificacionesNativas_() {
+      return !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications);
+    }
+
+    /** Convierte un UUID de Supabase en un número entero estable — el
+     *  plugin de notificaciones exige IDs numéricos, no texto. */
+    function idNotificacion_(uuid) {
+      let hash = 0;
+      for (let i = 0; i < uuid.length; i++) {
+        hash = ((hash << 5) - hash + uuid.charCodeAt(i)) | 0;
+      }
+      return (Math.abs(hash) % 2147483647) || 1;
+    }
+
+    async function pedirPermisoNotificaciones() {
+      if (!tieneNotificacionesNativas_()) return;
+      try {
+        const LN = window.Capacitor.Plugins.LocalNotifications;
+        const estado = await LN.checkPermissions();
+        if (estado.display !== 'granted') await LN.requestPermissions();
+      } catch (e) { /* silencioso: si el usuario rechaza el permiso, seguimos sin notificar */ }
+    }
+
+    /** Programa (o reprograma, si ya existía una con el mismo id) un aviso
+     *  para el día ANTERIOR a la fecha límite, a las 9am. Si la fecha ya
+     *  pasó o está muy cerca, no programa nada — no tiene sentido avisar
+     *  de algo que ya venció. */
+    async function programarNotificacion_(uuid, titulo, cuerpo, fechaLimiteISO) {
+      if (!tieneNotificacionesNativas_() || !fechaLimiteISO) return;
+      try {
+        const fechaAviso = new Date(fechaLimiteISO + 'T09:00:00');
+        fechaAviso.setDate(fechaAviso.getDate() - 1);
+        if (fechaAviso <= new Date()) return;
+        await window.Capacitor.Plugins.LocalNotifications.schedule({
+          notifications: [{ id: idNotificacion_(uuid), title: titulo, body: cuerpo, schedule: { at: fechaAviso } }]
+        });
+      } catch (e) { /* silencioso */ }
+    }
+
+    async function cancelarNotificacion_(uuid) {
+      if (!tieneNotificacionesNativas_()) return;
+      try {
+        await window.Capacitor.Plugins.LocalNotifications.cancel({ notifications: [{ id: idNotificacion_(uuid) }] });
+      } catch (e) { /* silencioso */ }
+    }
+
+    /** Repasa TODAS las deudas y cobros pendientes con fecha y (re)programa
+     *  su notificación — se llama una vez al cargar la app, para que un
+     *  aviso no se pierda si reinstalaste o si algo falló en su momento. */
+    async function sincronizarNotificaciones_(deudas, porCobrar) {
+      if (!tieneNotificacionesNativas_()) return;
+      await pedirPermisoNotificaciones();
+      (deudas || []).forEach(d => {
+        if (d.pagada || !d.fecha) return;
+        programarNotificacion_(d.id, 'Deuda por vencer', d.descripcion + ' vence mañana', d.fecha);
+      });
+      (porCobrar || []).forEach(c => {
+        if (c.cobrada || !c.fecha) return;
+        programarNotificacion_(c.id, 'Cobro por vencer', c.nombre + ' te paga mañana', c.fecha);
+      });
+    }
+
     async function getCategorias() {
       const { data, error } = await sb.from('categorias').select('nombre').order('nombre');
       if (error) throw error;
@@ -822,8 +903,28 @@
       return { ok: true, cuentas: await getCuentas() };
     }
 
-    async function actualizarSaldoCuenta(id, saldo) {
-      await sb.from('cuentas').update({ saldo: Number(saldo) || 0, actualizado: new Date().toISOString() }).eq('id', id);
+    /** Actualiza el saldo de una cuenta. Si generarMovimiento es true y hay
+     *  diferencia, esa diferencia se registra como un ingreso o gasto real
+     *  (según el signo) en vez de simplemente sobreescribir el número — así
+     *  queda rastro de por qué cambió, igual que cualquier otro movimiento.
+     *  Si generarMovimiento es false, es una corrección pura: solo cambia
+     *  el número, sin dejar movimiento (para typos, estimaciones, etc.). */
+    async function actualizarSaldoCuenta(id, nuevoSaldo, generarMovimiento) {
+      const { data: cuenta } = await sb.from('cuentas').select('saldo').eq('id', id).maybeSingle();
+      const saldoActual = cuenta ? (Number(cuenta.saldo) || 0) : 0;
+      const nuevo = Number(nuevoSaldo) || 0;
+      const delta = nuevo - saldoActual;
+
+      if (generarMovimiento && delta !== 0) {
+        const hoy = new Date().toISOString().split('T')[0];
+        if (delta > 0) {
+          await agregarIngreso(hoy, 'Ajuste de saldo', delta, 'Extra', id);
+        } else {
+          await agregarGasto(hoy, 'Otros', 'Ajuste de saldo', -delta, id);
+        }
+      } else {
+        await sb.from('cuentas').update({ saldo: nuevo, actualizado: new Date().toISOString() }).eq('id', id);
+      }
       return { ok: true, cuentas: await getCuentas() };
     }
 
@@ -1057,11 +1158,12 @@
     }
 
     async function agregarDeuda(descripcion, monto, fecha) {
-      const { error } = await sb.from('deudas').insert({
+      const { data, error } = await sb.from('deudas').insert({
         fecha_vencimiento: fecha || null, descripcion, monto: Number(monto) || 0,
         pagada: false, monto_pagado: 0
-      });
+      }).select('id').single();
       if (error) throw error;
+      if (fecha) await programarNotificacion_(data.id, 'Deuda por vencer', descripcion + ' vence mañana', fecha);
       return { ok: true, deudas: await getDeudas() };
     }
 
@@ -1077,6 +1179,7 @@
       const nuevoMontoPagado = (Number(fila.monto_pagado) || 0) + abono;
       const pagadaCompleta = nuevoMontoPagado >= (Number(fila.monto) || 0);
       await sb.from('deudas').update({ monto_pagado: nuevoMontoPagado, pagada: pagadaCompleta }).eq('id', id);
+      if (pagadaCompleta) await cancelarNotificacion_(id);
       await agregarGasto(
         new Date().toISOString().split('T')[0], 'Pago de deudas',
         'Abono: ' + fila.descripcion, abono, cuentaId
@@ -1085,6 +1188,7 @@
     }
 
     async function eliminarDeuda(id) {
+      await cancelarNotificacion_(id);
       await sb.from('deudas').delete().eq('id', id);
       return { ok: true, deudas: await getDeudas() };
     }
@@ -1105,11 +1209,12 @@
     }
 
     async function agregarPorCobrar(nombre, descripcion, monto, fecha) {
-      const { error } = await sb.from('por_cobrar').insert({
+      const { data, error } = await sb.from('por_cobrar').insert({
         nombre: (nombre || '').trim(), descripcion, monto: Number(monto) || 0,
         fecha_limite: fecha || null, cobrada: false, monto_cobrado: 0
-      });
+      }).select('id').single();
       if (error) throw error;
+      if (fecha) await programarNotificacion_(data.id, 'Cobro por vencer', (nombre || '').trim() + ' te paga mañana', fecha);
       return { ok: true, porCobrar: await getPorCobrar() };
     }
 
@@ -1122,6 +1227,7 @@
       const nuevoMontoCobrado = (Number(fila.monto_cobrado) || 0) + abono;
       const cobradaCompleta = nuevoMontoCobrado >= (Number(fila.monto) || 0);
       await sb.from('por_cobrar').update({ monto_cobrado: nuevoMontoCobrado, cobrada: cobradaCompleta }).eq('id', id);
+      if (cobradaCompleta) await cancelarNotificacion_(id);
       await agregarIngreso(
         new Date().toISOString().split('T')[0],
         'Abono: ' + fila.nombre + (fila.descripcion ? ' — ' + fila.descripcion : ''),
@@ -1131,6 +1237,7 @@
     }
 
     async function eliminarPorCobrar(id) {
+      await cancelarNotificacion_(id);
       await sb.from('por_cobrar').delete().eq('id', id);
       return { ok: true, porCobrar: await getPorCobrar() };
     }
@@ -1178,6 +1285,7 @@
       renderPorCobrar(d.porCobrar);
       renderCuentas(d.cuentas);
       renderCuentasSelect();
+      sincronizarNotificaciones_(d.deudas, d.porCobrar);
     }
 
     function capitalizar(txt) {
@@ -1305,6 +1413,13 @@
       });
     }
 
+    document.getElementById('btn-editar-movimientos').addEventListener('click', () => {
+      modoEdicionMovimientos = !modoEdicionMovimientos;
+      document.getElementById('btn-editar-movimientos').textContent = modoEdicionMovimientos ? 'Listo' : 'Editar';
+      document.getElementById('btn-editar-movimientos').classList.toggle('ok', modoEdicionMovimientos);
+      renderMovimientos(datos.movimientos);
+    });
+
     function renderMovimientos(lista) {
       const cont = document.getElementById('lista-movimientos');
       cont.innerHTML = '';
@@ -1334,28 +1449,30 @@
         const botonesDiv = document.createElement('div');
         botonesDiv.className = 'mov-acciones-botones';
 
-        const btnEditar = document.createElement('button');
-        btnEditar.type = 'button';
-        btnEditar.className = 'btn-mini';
-        btnEditar.textContent = 'Editar';
-        btnEditar.addEventListener('click', () => activarEdicionMovimiento(div, m));
-        botonesDiv.appendChild(btnEditar);
+        if (modoEdicionMovimientos) {
+          const btnEditar = document.createElement('button');
+          btnEditar.type = 'button';
+          btnEditar.className = 'btn-mini';
+          btnEditar.textContent = 'Editar';
+          btnEditar.addEventListener('click', () => activarEdicionMovimiento(div, m));
+          botonesDiv.appendChild(btnEditar);
 
-        const btnBorrar = document.createElement('button');
-        btnBorrar.type = 'button';
-        btnBorrar.className = 'btn-mini borrar';
-        btnBorrar.textContent = 'Eliminar';
-        btnBorrar.addEventListener('click', async () => {
-          if (!confirm('¿Eliminar este ' + (m.tipo === 'gasto' ? 'gasto' : 'ingreso') + '?')) return;
-          try {
-            const res = m.tipo === 'gasto' ? await eliminarGasto(m.id) : await eliminarIngreso(m.id);
-            datos.cuentas = res.cuentas;
-            renderCuentas(res.cuentas);
-            cargarResumenDeMes(mesSeleccionado);
-            actualizarListaMeses();
+          const btnBorrar = document.createElement('button');
+          btnBorrar.type = 'button';
+          btnBorrar.className = 'btn-mini borrar';
+          btnBorrar.textContent = 'Eliminar';
+          btnBorrar.addEventListener('click', async () => {
+            if (!confirm('¿Eliminar este ' + (m.tipo === 'gasto' ? 'gasto' : 'ingreso') + '?')) return;
+            try {
+              const res = m.tipo === 'gasto' ? await eliminarGasto(m.id) : await eliminarIngreso(m.id);
+              datos.cuentas = res.cuentas;
+              renderCuentas(res.cuentas);
+              cargarResumenDeMes(mesSeleccionado);
+              actualizarListaMeses();
           } catch (err) { alert(err.message); }
-        });
-        botonesDiv.appendChild(btnBorrar);
+          });
+          botonesDiv.appendChild(btnBorrar);
+        }
 
         accionesDiv.appendChild(botonesDiv);
         div.appendChild(infoDiv);
@@ -1871,12 +1988,14 @@
       btnGuardar.type = 'button';
       btnGuardar.className = 'btn-mini ok';
       btnGuardar.textContent = 'Guardar';
-      btnGuardar.addEventListener('click', async () => {
-        try {
-          const res = await actualizarSaldoCuenta(cuenta.id, input.value);
-          datos.cuentas = res.cuentas;
-          renderCuentas(res.cuentas);
-        } catch (err) { mostrarMensaje('msg-cuenta', err.message, 'error'); }
+      btnGuardar.addEventListener('click', () => {
+        const nuevo = Number(input.value) || 0;
+        const delta = nuevo - cuenta.saldo;
+        if (delta === 0) {
+          renderCuentas(datos.cuentas);
+          return;
+        }
+        confirmarAjusteSaldo(accionesDiv, cuenta, nuevo, delta);
       });
 
       const btnCancelar = document.createElement('button');
@@ -1890,6 +2009,58 @@
       accionesDiv.appendChild(input);
       accionesDiv.appendChild(botonesDiv);
       input.focus();
+    }
+
+    /** Se activa al guardar un saldo distinto al que había. Pregunta si la
+     *  diferencia corresponde a un movimiento real que no se había
+     *  registrado (y en ese caso genera el ingreso/gasto correspondiente)
+     *  o si solo es una corrección del número, sin movimiento real detrás. */
+    function confirmarAjusteSaldo(accionesDiv, cuenta, nuevoSaldo, delta) {
+      accionesDiv.innerHTML = '';
+
+      const texto = document.createElement('div');
+      texto.className = 'mov-meta';
+      texto.style.cssText = 'text-align:right; margin-bottom:2px;';
+      texto.textContent = 'Diferencia: ' + (delta > 0 ? '+' : '') + formatoMoneda(delta);
+      accionesDiv.appendChild(texto);
+
+      const botonesDiv = document.createElement('div');
+      botonesDiv.className = 'mov-acciones-botones';
+
+      const ejecutar = async (generarMovimiento) => {
+        try {
+          const res = await actualizarSaldoCuenta(cuenta.id, nuevoSaldo, generarMovimiento);
+          datos.cuentas = res.cuentas;
+          renderCuentas(res.cuentas);
+          if (generarMovimiento) {
+            cargarResumenDeMes(mesSeleccionado);
+            actualizarListaMeses();
+          }
+        } catch (err) { mostrarMensaje('msg-cuenta', err.message, 'error'); }
+      };
+
+      const btnMovimiento = document.createElement('button');
+      btnMovimiento.type = 'button';
+      btnMovimiento.className = 'btn-mini ok';
+      btnMovimiento.textContent = delta > 0 ? 'Fue un ingreso' : 'Fue un gasto';
+      btnMovimiento.addEventListener('click', () => ejecutar(true));
+
+      const btnCorreccion = document.createElement('button');
+      btnCorreccion.type = 'button';
+      btnCorreccion.className = 'btn-mini';
+      btnCorreccion.textContent = 'Solo corregir';
+      btnCorreccion.addEventListener('click', () => ejecutar(false));
+
+      const btnCancelar = document.createElement('button');
+      btnCancelar.type = 'button';
+      btnCancelar.className = 'btn-mini';
+      btnCancelar.textContent = 'Cancelar';
+      btnCancelar.addEventListener('click', () => renderCuentas(datos.cuentas));
+
+      botonesDiv.appendChild(btnMovimiento);
+      botonesDiv.appendChild(btnCorreccion);
+      botonesDiv.appendChild(btnCancelar);
+      accionesDiv.appendChild(botonesDiv);
     }
 
     function renderCuentasSelect() {
