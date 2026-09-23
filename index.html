@@ -1335,6 +1335,18 @@
       return { ok: true, deudas: await getDeudas(), cuentas: await getCuentas() };
     }
 
+    /** Suma al monto original de una deuda (por ejemplo, un cargo nuevo a
+     *  una tarjeta). No genera ningún movimiento ni pide cuenta, porque a
+     *  diferencia de un abono, esto no necesariamente sale de una cuenta
+     *  tuya en el momento — solo aumenta lo que debes. */
+    async function aumentarDeuda(id, montoAumento) {
+      const { data: fila } = await sb.from('deudas').select('monto').eq('id', id).maybeSingle();
+      if (!fila) return { ok: false, error: 'No se encontró la deuda' };
+      const nuevoMonto = (Number(fila.monto) || 0) + (Number(montoAumento) || 0);
+      await sb.from('deudas').update({ monto: nuevoMonto }).eq('id', id);
+      return { ok: true, deudas: await getDeudas() };
+    }
+
     async function eliminarDeuda(id) {
       await cancelarNotificacion_(id);
       await sb.from('deudas').delete().eq('id', id);
@@ -1771,6 +1783,13 @@
           btnAbonar.textContent = 'Abonar';
           btnAbonar.addEventListener('click', () => activarAbonoDeuda(accionesDiv, d));
           botonesDiv.appendChild(btnAbonar);
+
+          const btnAumentar = document.createElement('button');
+          btnAumentar.type = 'button';
+          btnAumentar.className = 'btn-mini';
+          btnAumentar.textContent = 'Aumentar';
+          btnAumentar.addEventListener('click', () => activarAumentoDeuda(accionesDiv, d));
+          botonesDiv.appendChild(btnAumentar);
         }
 
         const btnBorrar = document.createElement('button');
@@ -1857,6 +1876,50 @@
       botonesDiv.appendChild(btnCancelar);
       accionesDiv.appendChild(inputMonto);
       accionesDiv.appendChild(selectCuenta);
+      accionesDiv.appendChild(botonesDiv);
+      inputMonto.focus();
+    }
+
+    /** Suma al monto de una deuda existente — sin cuenta, sin movimiento,
+     *  solo el número que debes crece. */
+    function activarAumentoDeuda(accionesDiv, deuda) {
+      accionesDiv.innerHTML = '';
+
+      const inputMonto = document.createElement('input');
+      inputMonto.type = 'number';
+      inputMonto.step = 'any';
+      inputMonto.min = '0';
+      inputMonto.placeholder = 'Monto a agregar';
+      inputMonto.className = 'mono';
+      inputMonto.style.cssText = 'width:100%; background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.9rem; padding:6px 2px; text-align:right;';
+
+      const botonesDiv = document.createElement('div');
+      botonesDiv.className = 'mov-acciones-botones';
+
+      const btnConfirmar = document.createElement('button');
+      btnConfirmar.type = 'button';
+      btnConfirmar.className = 'btn-mini ok';
+      btnConfirmar.textContent = 'Confirmar';
+      btnConfirmar.addEventListener('click', async () => {
+        const monto = Number(inputMonto.value) || 0;
+        if (monto <= 0) { mostrarMensaje('msg-deuda', 'Pon un monto mayor a cero', 'error'); return; }
+        try {
+          const res = await aumentarDeuda(deuda.id, monto);
+          datos.deudas = res.deudas;
+          renderDeudas(res.deudas);
+          cargarResumenDeMes(mesSeleccionado);
+        } catch (err) { mostrarMensaje('msg-deuda', err.message, 'error'); }
+      });
+
+      const btnCancelar = document.createElement('button');
+      btnCancelar.type = 'button';
+      btnCancelar.className = 'btn-mini';
+      btnCancelar.textContent = 'Cancelar';
+      btnCancelar.addEventListener('click', () => renderDeudas(datos.deudas));
+
+      botonesDiv.appendChild(btnConfirmar);
+      botonesDiv.appendChild(btnCancelar);
+      accionesDiv.appendChild(inputMonto);
       accionesDiv.appendChild(botonesDiv);
       inputMonto.focus();
     }
