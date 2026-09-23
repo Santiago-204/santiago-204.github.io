@@ -1127,8 +1127,10 @@
         totalGastos += monto;
       });
 
-      const { data: deudasData } = await sb.from('deudas').select('monto').eq('pagada', false);
-      const totalDeudasPendientes = (deudasData || []).reduce((s, r) => s + (Number(r.monto) || 0), 0);
+      const { data: deudasData } = await sb.from('deudas').select('monto, monto_pagado').eq('pagada', false);
+      const totalDeudasPendientes = (deudasData || []).reduce(
+        (s, r) => s + Math.max((Number(r.monto) || 0) - (Number(r.monto_pagado) || 0), 0), 0
+      );
 
       return {
         mes: clave,
@@ -1922,7 +1924,7 @@
       const deudaPendiente = datos && datos.resumen ? datos.resumen.totalDeudasPendientes : 0;
       const porCobrarPendiente = (datos && datos.porCobrar ? datos.porCobrar : [])
         .filter(c => !c.cobrada)
-        .reduce((suma, c) => suma + c.monto, 0);
+        .reduce((suma, c) => suma + c.pendiente, 0);
 
       document.getElementById('r-deudas-total').textContent = formatoMoneda(deudaPendiente);
       document.getElementById('r-por-cobrar').textContent = formatoMoneda(porCobrarPendiente);
