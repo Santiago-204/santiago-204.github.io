@@ -428,6 +428,24 @@
     #pantalla-bloqueo p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
     #pantalla-bloqueo .primario { padding: 12px 22px; margin-top: 6px; }
 
+    #pantalla-login {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 998;
+      background: var(--ink);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      text-align: center;
+      padding: 24px;
+    }
+    #pantalla-login.activa { display: flex; }
+    #pantalla-login img { width: 64px; height: 64px; border-radius: 14px; background: #fff; }
+    #pantalla-login p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
+    #pantalla-login .field { text-align: left; }
+
     .vista { display: none; }
     .vista.activa { display: block; }
 
@@ -529,6 +547,7 @@
     <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h7a3 3 0 0 1 3 3v13a2.5 2.5 0 0 0-2.5-2.5H2Z"/><path d="M22 4h-7a3 3 0 0 0-3 3v13a2.5 2.5 0 0 1 2.5-2.5H22Z"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><path d="M21 12H9"/></symbol>
   </svg>
 
   <div id="pantalla-bloqueo">
@@ -539,12 +558,24 @@
     <p id="msg-bloqueo" class="msg error" style="display:none;"></p>
   </div>
 
+  <div id="pantalla-login">
+    <img src="icon.png" alt="">
+    <p>Inicia sesión para entrar a Vigía</p>
+    <form id="form-login" style="width:100%; max-width:280px; display:flex; flex-direction:column; gap:14px;">
+      <div class="field"><label>Correo</label><input type="email" id="login-correo" required autocomplete="username"></div>
+      <div class="field"><label>Contraseña</label><input type="password" id="login-clave" required autocomplete="current-password"></div>
+      <button type="submit" class="primario">Entrar</button>
+      <p id="msg-login" class="msg error" style="display:none;"></p>
+    </form>
+  </div>
+
   <header class="masthead">
     <div class="brand-row">
       <span class="brand"><img src="icon.png" alt="" class="brand-logo"> <span class="brand-name">Vigía</span></span>
       <div class="brand-derecha">
         <span class="period" id="fecha-actual"></span>
         <button id="btn-tema" class="btn-tema" type="button" aria-label="Cambiar tema" title="Cambiar tema"><svg class="ico"><use href="#i-moon"/></svg></button>
+        <button id="btn-logout" class="btn-tema" type="button" aria-label="Cerrar sesión" title="Cerrar sesión"><svg class="ico"><use href="#i-logout"/></svg></button>
       </div>
     </div>
   </header>
@@ -2239,7 +2270,7 @@
         const disponible = await NB.isAvailable();
         if (!disponible.isAvailable) {
           document.getElementById('pantalla-bloqueo').classList.remove('activa');
-          cargarDatos();
+          verificarSesionYcontinuar();
           return;
         }
         await NB.verifyIdentity({
@@ -2249,7 +2280,7 @@
           description: 'Usa tu huella para entrar'
         });
         document.getElementById('pantalla-bloqueo').classList.remove('activa');
-        cargarDatos();
+        verificarSesionYcontinuar();
       } catch (e) {
         msg.textContent = 'No se pudo verificar. Intenta de nuevo.';
         msg.style.display = 'block';
@@ -2258,11 +2289,51 @@
 
     document.getElementById('btn-desbloquear').addEventListener('click', intentarDesbloqueo);
 
+    /* =========================================================
+     * SESIÓN — a diferencia de la huella (que solo protege el
+     * celular), esto protege los DATOS: sin sesión válida contra
+     * Supabase, ninguna consulta a las tablas devuelve nada (las
+     * políticas de seguridad lo bloquean), sin importar si alguien
+     * tiene el .apk o el enlace.
+     * ========================================================= */
+
+    async function verificarSesionYcontinuar() {
+      const { data } = await sb.auth.getSession();
+      if (data && data.session) {
+        document.getElementById('pantalla-login').classList.remove('activa');
+        cargarDatos();
+      } else {
+        document.getElementById('pantalla-login').classList.add('activa');
+      }
+    }
+
+    document.getElementById('form-login').addEventListener('submit', async e => {
+      e.preventDefault();
+      const correo = document.getElementById('login-correo').value.trim();
+      const clave = document.getElementById('login-clave').value;
+      const msg = document.getElementById('msg-login');
+      msg.style.display = 'none';
+      const { error } = await sb.auth.signInWithPassword({ email: correo, password: clave });
+      if (error) {
+        msg.textContent = 'Correo o contraseña incorrectos';
+        msg.style.display = 'block';
+        return;
+      }
+      document.getElementById('pantalla-login').classList.remove('activa');
+      cargarDatos();
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', async () => {
+      if (!confirm('¿Cerrar sesión?')) return;
+      await sb.auth.signOut();
+      location.reload();
+    });
+
     if (tieneBiometriaNativa_()) {
       document.getElementById('pantalla-bloqueo').classList.add('activa');
       intentarDesbloqueo();
     } else {
-      cargarDatos();
+      verificarSesionYcontinuar();
     }
   </script>
 </body>
