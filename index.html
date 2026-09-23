@@ -868,6 +868,55 @@
       };
     }
 
+    /** Elimina un ingreso y revierte lo que le había sumado a su cuenta
+     *  (si tenía una asociada). */
+    async function eliminarIngreso(id) {
+      const { data: fila } = await sb.from('ingresos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      await sb.from('ingresos').delete().eq('id', id);
+      if (fila) await ajustarSaldoCuenta_(fila.cuenta_id, -(Number(fila.monto) || 0));
+      return { ok: true, cuentas: await getCuentas() };
+    }
+
+    /** Elimina un gasto y revierte lo que le había restado a su cuenta. */
+    async function eliminarGasto(id) {
+      const { data: fila } = await sb.from('gastos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      await sb.from('gastos').delete().eq('id', id);
+      if (fila) await ajustarSaldoCuenta_(fila.cuenta_id, Number(fila.monto) || 0);
+      return { ok: true, cuentas: await getCuentas() };
+    }
+
+    /** Edita un ingreso ya guardado: primero revierte el efecto que tenía
+     *  en su cuenta ORIGINAL, guarda los datos nuevos, y aplica el efecto
+     *  en la cuenta NUEVA (puede ser la misma u otra distinta). */
+    async function editarIngreso(id, fecha, descripcion, monto, cuentaId) {
+      const { data: original } = await sb.from('ingresos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      if (!original) return { ok: false, error: 'No se encontró el ingreso' };
+      await ajustarSaldoCuenta_(original.cuenta_id, -(Number(original.monto) || 0));
+      const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
+      const { error } = await sb.from('ingresos').update({
+        fecha, descripcion, monto: Number(monto) || 0,
+        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
+      }).eq('id', id);
+      if (error) throw error;
+      await ajustarSaldoCuenta_(cuentaId, Number(monto) || 0);
+      return { ok: true, cuentas: await getCuentas() };
+    }
+
+    /** Simétrico a editarIngreso, para gastos. */
+    async function editarGasto(id, fecha, categoria, descripcion, monto, cuentaId) {
+      const { data: original } = await sb.from('gastos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      if (!original) return { ok: false, error: 'No se encontró el gasto' };
+      await ajustarSaldoCuenta_(original.cuenta_id, Number(original.monto) || 0);
+      const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
+      const { error } = await sb.from('gastos').update({
+        fecha, categoria, descripcion, monto: Number(monto) || 0,
+        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
+      }).eq('id', id);
+      if (error) throw error;
+      await ajustarSaldoCuenta_(cuentaId, -(Number(monto) || 0));
+      return { ok: true, cuentas: await getCuentas() };
+    }
+
     async function listarMesesDisponibles() {
       const claves = new Set([claveMes_()]);
       const [{ data: ing }, { data: gas }] = await Promise.all([
@@ -962,18 +1011,20 @@
       const { desde, hasta } = rangoDeMes_(clave);
 
       const [{ data: ingData }, { data: gasData }] = await Promise.all([
-        sb.from('ingresos').select('fecha, descripcion, monto, tipo, cuenta_nombre').gte('fecha', desde).lt('fecha', hasta),
-        sb.from('gastos').select('fecha, categoria, descripcion, monto, cuenta_nombre').gte('fecha', desde).lt('fecha', hasta)
+        sb.from('ingresos').select('id, fecha, descripcion, monto, tipo, cuenta_id, cuenta_nombre').gte('fecha', desde).lt('fecha', hasta),
+        sb.from('gastos').select('id, fecha, categoria, descripcion, monto, cuenta_id, cuenta_nombre').gte('fecha', desde).lt('fecha', hasta)
       ]);
 
       const movimientos = [];
       (ingData || []).forEach(r => movimientos.push({
-        fecha: r.fecha, tipo: 'ingreso', categoria: r.tipo || 'Ingreso',
-        descripcion: r.descripcion, monto: Number(r.monto) || 0, cuenta: r.cuenta_nombre || ''
+        id: r.id, fecha: r.fecha, tipo: 'ingreso', categoria: r.tipo || 'Ingreso',
+        descripcion: r.descripcion, monto: Number(r.monto) || 0,
+        cuentaId: r.cuenta_id || '', cuenta: r.cuenta_nombre || ''
       }));
       (gasData || []).forEach(r => movimientos.push({
-        fecha: r.fecha, tipo: 'gasto', categoria: r.categoria,
-        descripcion: r.descripcion, monto: Number(r.monto) || 0, cuenta: r.cuenta_nombre || ''
+        id: r.id, fecha: r.fecha, tipo: 'gasto', categoria: r.categoria,
+        descripcion: r.descripcion, monto: Number(r.monto) || 0,
+        cuentaId: r.cuenta_id || '', cuenta: r.cuenta_nombre || ''
       }));
 
       movimientos.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
@@ -1159,6 +1210,7 @@
       try {
         const d = await getResumenPorMes(mesKey);
         datos.resumen = d.resumen;
+        datos.movimientos = d.movimientos;
         renderResumen(d.resumen);
         renderMovimientos(d.movimientos);
         if (datos.cuentas) renderCuentas(datos.cuentas);
@@ -1264,15 +1316,156 @@
         const fecha = new Date(m.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
         const div = document.createElement('div');
         div.className = 'mov-row';
-        div.innerHTML = `
-          <div>
-            <div class="mov-desc">${m.descripcion}</div>
-            <div class="mov-meta">${m.tipo === 'gasto' ? iconoCategoria(m.categoria) + ' ' : ''}${m.categoria} · ${fecha}${m.cuenta ? ' · <svg class="ico ico-mini"><use href="#i-bank"/></svg> ' + m.cuenta : ''}</div>
-          </div>
-          <div class="mov-amt mono ${m.tipo === 'gasto' ? 'spend' : 'money'}">${m.tipo === 'gasto' ? '-' : '+'}${formatoMoneda(m.monto)}</div>
+
+        const infoDiv = document.createElement('div');
+        infoDiv.innerHTML = `
+          <div class="mov-desc">${m.descripcion}</div>
+          <div class="mov-meta">${m.tipo === 'gasto' ? iconoCategoria(m.categoria) + ' ' : ''}${m.categoria} · ${fecha}${m.cuenta ? ' · <svg class="ico ico-mini"><use href="#i-bank"/></svg> ' + m.cuenta : ''}</div>
         `;
+
+        const accionesDiv = document.createElement('div');
+        accionesDiv.className = 'mov-acciones';
+
+        const montoDiv = document.createElement('div');
+        montoDiv.className = 'mov-amt mono ' + (m.tipo === 'gasto' ? 'spend' : 'money');
+        montoDiv.textContent = (m.tipo === 'gasto' ? '-' : '+') + formatoMoneda(m.monto);
+        accionesDiv.appendChild(montoDiv);
+
+        const botonesDiv = document.createElement('div');
+        botonesDiv.className = 'mov-acciones-botones';
+
+        const btnEditar = document.createElement('button');
+        btnEditar.type = 'button';
+        btnEditar.className = 'btn-mini';
+        btnEditar.textContent = 'Editar';
+        btnEditar.addEventListener('click', () => activarEdicionMovimiento(div, m));
+        botonesDiv.appendChild(btnEditar);
+
+        const btnBorrar = document.createElement('button');
+        btnBorrar.type = 'button';
+        btnBorrar.className = 'btn-mini borrar';
+        btnBorrar.textContent = 'Eliminar';
+        btnBorrar.addEventListener('click', async () => {
+          if (!confirm('¿Eliminar este ' + (m.tipo === 'gasto' ? 'gasto' : 'ingreso') + '?')) return;
+          try {
+            const res = m.tipo === 'gasto' ? await eliminarGasto(m.id) : await eliminarIngreso(m.id);
+            datos.cuentas = res.cuentas;
+            renderCuentas(res.cuentas);
+            cargarResumenDeMes(mesSeleccionado);
+            actualizarListaMeses();
+          } catch (err) { alert(err.message); }
+        });
+        botonesDiv.appendChild(btnBorrar);
+
+        accionesDiv.appendChild(botonesDiv);
+        div.appendChild(infoDiv);
+        div.appendChild(accionesDiv);
         cont.appendChild(div);
       });
+    }
+
+    /** Reemplaza una fila de Movimientos recientes por un formulario en
+     *  línea (fecha, descripción, monto, categoría si es gasto, cuenta) —
+     *  mismo patrón que activarEdicionCuenta, pero con más campos porque
+     *  un movimiento tiene más datos que editar. */
+    function activarEdicionMovimiento(div, m) {
+      const esGasto = m.tipo === 'gasto';
+      div.innerHTML = '';
+      div.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:11px 0; border-bottom:1px solid var(--line);';
+
+      const estiloCampo = 'width:100%; background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.85rem; padding:6px 2px;';
+
+      const inputFecha = document.createElement('input');
+      inputFecha.type = 'date';
+      inputFecha.value = m.fecha;
+      inputFecha.className = 'mono';
+      inputFecha.style.cssText = estiloCampo;
+
+      const inputDesc = document.createElement('input');
+      inputDesc.type = 'text';
+      inputDesc.value = m.descripcion;
+      inputDesc.placeholder = 'Descripción';
+      inputDesc.style.cssText = estiloCampo;
+
+      const inputMonto = document.createElement('input');
+      inputMonto.type = 'number';
+      inputMonto.step = 'any';
+      inputMonto.min = '0';
+      inputMonto.value = m.monto;
+      inputMonto.className = 'mono';
+      inputMonto.style.cssText = estiloCampo;
+
+      let selectCategoria = null;
+      if (esGasto) {
+        selectCategoria = document.createElement('select');
+        selectCategoria.style.cssText = estiloCampo;
+        (datos.categorias || []).forEach(c => {
+          const op = document.createElement('option');
+          op.value = c;
+          op.textContent = c;
+          if (c === m.categoria) op.selected = true;
+          selectCategoria.appendChild(op);
+        });
+      }
+
+      const selectCuenta = document.createElement('select');
+      selectCuenta.style.cssText = estiloCampo;
+      const opPlaceholder = document.createElement('option');
+      opPlaceholder.value = '';
+      opPlaceholder.textContent = 'Sin cuenta específica';
+      selectCuenta.appendChild(opPlaceholder);
+      (datos.cuentas || []).forEach(c => {
+        const op = document.createElement('option');
+        op.value = c.id;
+        op.textContent = c.nombre;
+        if (c.id === m.cuentaId) op.selected = true;
+        selectCuenta.appendChild(op);
+      });
+
+      const botonesDiv = document.createElement('div');
+      botonesDiv.className = 'mov-acciones-botones';
+      botonesDiv.style.justifyContent = 'flex-end';
+
+      const btnGuardar = document.createElement('button');
+      btnGuardar.type = 'button';
+      btnGuardar.className = 'btn-mini ok';
+      btnGuardar.textContent = 'Guardar';
+      btnGuardar.addEventListener('click', async () => {
+        const fecha = inputFecha.value;
+        const descripcion = inputDesc.value.trim();
+        const monto = Number(inputMonto.value) || 0;
+        const cuentaId = selectCuenta.value;
+        if (!fecha || !descripcion || monto <= 0) {
+          alert('Revisa la fecha, la descripción y el monto');
+          return;
+        }
+        try {
+          const res = esGasto
+            ? await editarGasto(m.id, fecha, selectCategoria.value, descripcion, monto, cuentaId)
+            : await editarIngreso(m.id, fecha, descripcion, monto, cuentaId);
+          if (!res.ok) { alert(res.error || 'No se pudo guardar'); return; }
+          datos.cuentas = res.cuentas;
+          renderCuentas(res.cuentas);
+          cargarResumenDeMes(mesSeleccionado);
+          actualizarListaMeses();
+        } catch (err) { alert(err.message); }
+      });
+
+      const btnCancelar = document.createElement('button');
+      btnCancelar.type = 'button';
+      btnCancelar.className = 'btn-mini';
+      btnCancelar.textContent = 'Cancelar';
+      btnCancelar.addEventListener('click', () => renderMovimientos(datos.movimientos));
+
+      botonesDiv.appendChild(btnGuardar);
+      botonesDiv.appendChild(btnCancelar);
+
+      div.appendChild(inputFecha);
+      div.appendChild(inputDesc);
+      div.appendChild(inputMonto);
+      if (selectCategoria) div.appendChild(selectCategoria);
+      div.appendChild(selectCuenta);
+      div.appendChild(botonesDiv);
     }
 
     // ---------- Deudas (Debo) ----------
