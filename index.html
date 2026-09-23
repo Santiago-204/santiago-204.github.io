@@ -84,6 +84,11 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      color: var(--paper);
     }
     .brand-logo {
       width: 26px;
@@ -446,6 +451,53 @@
     #pantalla-login p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
     #pantalla-login .field { text-align: left; }
 
+    /* ---------- Panel de configuración (hamburguesa) ---------- */
+    #fondo-panel-config {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 1000;
+    }
+    #fondo-panel-config.activo { display: block; }
+    #panel-config {
+      display: none;
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 250px;
+      max-width: 78vw;
+      background: var(--surface-raised);
+      z-index: 1001;
+      flex-direction: column;
+      padding: 18px 16px;
+      box-shadow: -6px 0 24px rgba(0,0,0,0.3);
+    }
+    #panel-config.activo { display: flex; }
+    .panel-config-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .panel-config-header h3 { margin: 0; font-size: 1rem; color: var(--paper); }
+    .panel-config-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: none;
+      border: none;
+      border-bottom: 1px solid var(--line);
+      color: var(--paper);
+      text-align: left;
+      padding: 14px 4px;
+      font-family: 'Manrope', sans-serif;
+      font-size: 0.9rem;
+      cursor: pointer;
+      width: 100%;
+    }
+
     .vista { display: none; }
     .vista.activa { display: block; }
 
@@ -548,6 +600,8 @@
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
     <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><path d="M21 12H9"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
   </svg>
 
   <div id="pantalla-bloqueo">
@@ -569,13 +623,25 @@
     </form>
   </div>
 
+  <div id="fondo-panel-config"></div>
+  <div id="panel-config">
+    <div class="panel-config-header">
+      <h3>Configuración</h3>
+      <button id="btn-cerrar-config" type="button" class="btn-tema" aria-label="Cerrar"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <button id="btn-tema" type="button" class="panel-config-item">
+      <svg class="ico"><use href="#i-moon"/></svg> Cambiar tema
+    </button>
+    <button id="btn-logout" type="button" class="panel-config-item">
+      <svg class="ico"><use href="#i-logout"/></svg> Cerrar sesión
+    </button>
+  </div>
+
   <header class="masthead">
     <div class="brand-row">
-      <span class="brand"><img src="icon.png" alt="" class="brand-logo"> <span class="brand-name">Vigía</span></span>
+      <button id="btn-menu" class="brand" type="button" aria-label="Configuración" title="Configuración"><img src="icon.png" alt="" class="brand-logo"> <span class="brand-name">Vigía</span></button>
       <div class="brand-derecha">
         <span class="period" id="fecha-actual"></span>
-        <button id="btn-tema" class="btn-tema" type="button" aria-label="Cambiar tema" title="Cambiar tema"><svg class="ico"><use href="#i-moon"/></svg></button>
-        <button id="btn-logout" class="btn-tema" type="button" aria-label="Cerrar sesión" title="Cerrar sesión"><svg class="ico"><use href="#i-logout"/></svg></button>
       </div>
     </div>
   </header>
@@ -795,7 +861,23 @@
       const nuevo = actual === 'oscuro' ? 'claro' : 'oscuro';
       document.documentElement.setAttribute('data-tema', nuevo);
       localStorage.setItem('tema', nuevo);
+      cerrarPanelConfig();
     });
+
+    // ---------- Panel de configuración (hamburguesa) ----------
+    function abrirPanelConfig() {
+      document.getElementById('panel-config').classList.add('activo');
+      document.getElementById('fondo-panel-config').classList.add('activo');
+    }
+    function cerrarPanelConfig() {
+      document.getElementById('panel-config').classList.remove('activo');
+      document.getElementById('fondo-panel-config').classList.remove('activo');
+    }
+    document.getElementById('btn-menu').addEventListener('click', () => {
+      document.getElementById('panel-config').classList.contains('activo') ? cerrarPanelConfig() : abrirPanelConfig();
+    });
+    document.getElementById('btn-cerrar-config').addEventListener('click', cerrarPanelConfig);
+    document.getElementById('fondo-panel-config').addEventListener('click', cerrarPanelConfig);
 
     document.querySelectorAll('nav.tabs button').forEach(btn => {
       btn.addEventListener('click', () => {
