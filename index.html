@@ -498,6 +498,42 @@
       width: 100%;
     }
 
+    /* ---------- Modal de confirmación propio (reemplaza confirm()) ---------- */
+    #fondo-confirmar {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1010;
+    }
+    #fondo-confirmar.activo { display: block; }
+    #modal-confirmar {
+      display: none;
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 1011;
+      background: var(--surface-raised);
+      border-radius: 12px;
+      padding: 22px;
+      width: min(320px, 84vw);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    #modal-confirmar.activo { display: block; }
+    #msg-confirmar {
+      color: var(--paper);
+      font-size: 0.95rem;
+      margin: 0 0 20px;
+      text-align: center;
+    }
+    .modal-confirmar-botones {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+    .modal-confirmar-botones .btn-mini { padding: 9px 18px; font-size: 0.82rem; }
+
     .vista { display: none; }
     .vista.activa { display: block; }
 
@@ -635,6 +671,15 @@
     <button id="btn-logout" type="button" class="panel-config-item">
       <svg class="ico"><use href="#i-logout"/></svg> Cerrar sesión
     </button>
+  </div>
+
+  <div id="fondo-confirmar"></div>
+  <div id="modal-confirmar">
+    <p id="msg-confirmar"></p>
+    <div class="modal-confirmar-botones">
+      <button id="btn-confirmar-no" type="button" class="btn-mini">Cancelar</button>
+      <button id="btn-confirmar-si" type="button" class="btn-mini borrar">Sí, continuar</button>
+    </div>
   </div>
 
   <header class="masthead">
@@ -865,6 +910,31 @@
     });
 
     // ---------- Panel de configuración (hamburguesa) ----------
+    /** Reemplazo de confirm() nativo, con el estilo propio de la app.
+     *  Se usa con await: if (!(await confirmarAccion('¿Seguro?'))) return; */
+    function confirmarAccion(mensaje) {
+      return new Promise(resolve => {
+        document.getElementById('msg-confirmar').textContent = mensaje;
+        document.getElementById('modal-confirmar').classList.add('activo');
+        document.getElementById('fondo-confirmar').classList.add('activo');
+
+        const btnSi = document.getElementById('btn-confirmar-si');
+        const btnNo = document.getElementById('btn-confirmar-no');
+
+        const limpiar = () => {
+          document.getElementById('modal-confirmar').classList.remove('activo');
+          document.getElementById('fondo-confirmar').classList.remove('activo');
+          btnSi.removeEventListener('click', onSi);
+          btnNo.removeEventListener('click', onNo);
+        };
+        const onSi = () => { limpiar(); resolve(true); };
+        const onNo = () => { limpiar(); resolve(false); };
+
+        btnSi.addEventListener('click', onSi);
+        btnNo.addEventListener('click', onNo);
+      });
+    }
+
     function abrirPanelConfig() {
       document.getElementById('panel-config').classList.add('activo');
       document.getElementById('fondo-panel-config').classList.add('activo');
@@ -1625,7 +1695,7 @@
           btnBorrar.className = 'btn-mini borrar';
           btnBorrar.textContent = 'Eliminar';
           btnBorrar.addEventListener('click', async () => {
-            if (!confirm('¿Eliminar este ' + (m.tipo === 'gasto' ? 'gasto' : 'ingreso') + '?')) return;
+            if (!(await confirmarAccion('¿Eliminar este ' + (m.tipo === 'gasto' ? 'gasto' : 'ingreso') + '?'))) return;
             try {
               const res = m.tipo === 'gasto' ? await eliminarGasto(m.id) : await eliminarIngreso(m.id);
               datos.cuentas = res.cuentas;
@@ -1650,8 +1720,7 @@
      *  un movimiento tiene más datos que editar. */
     function activarEdicionMovimiento(div, m) {
       const esGasto = m.tipo === 'gasto';
-      div.innerHTML = '';
-      div.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:11px 0; border-bottom:1px solid var(--line);';
+      const frag = document.createDocumentFragment();
 
       const estiloCampo = 'width:100%; background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.85rem; padding:6px 2px;';
 
@@ -1740,12 +1809,17 @@
       botonesDiv.appendChild(btnGuardar);
       botonesDiv.appendChild(btnCancelar);
 
-      div.appendChild(inputFecha);
-      div.appendChild(inputDesc);
-      div.appendChild(inputMonto);
-      if (selectCategoria) div.appendChild(selectCategoria);
-      div.appendChild(selectCuenta);
-      div.appendChild(botonesDiv);
+      frag.appendChild(inputFecha);
+      frag.appendChild(inputDesc);
+      frag.appendChild(inputMonto);
+      if (selectCategoria) frag.appendChild(selectCategoria);
+      frag.appendChild(selectCuenta);
+      frag.appendChild(botonesDiv);
+
+      // Solo aquí, con todo ya armado sin errores, se reemplaza la fila real.
+      div.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:11px 0; border-bottom:1px solid var(--line);';
+      div.innerHTML = '';
+      div.appendChild(frag);
     }
 
     // ---------- Deudas (Debo) ----------
@@ -1800,7 +1874,7 @@
         btnBorrar.className = 'btn-mini borrar';
         btnBorrar.textContent = 'Eliminar';
         btnBorrar.addEventListener('click', async () => {
-          if (!confirm('¿Eliminar esta deuda?')) return;
+          if (!(await confirmarAccion('¿Eliminar esta deuda?'))) return;
           try {
             const res = await eliminarDeuda(d.id);
             datos.deudas = res.deudas;
@@ -1989,7 +2063,7 @@
         btnBorrar.className = 'btn-mini borrar';
         btnBorrar.textContent = 'Eliminar';
         btnBorrar.addEventListener('click', async () => {
-          if (!confirm('¿Eliminar este cobro pendiente?')) return;
+          if (!(await confirmarAccion('¿Eliminar este cobro pendiente?'))) return;
           try {
             const res = await eliminarPorCobrar(c.id);
             datos.porCobrar = res.porCobrar;
@@ -2168,7 +2242,7 @@
         btnBorrar.className = 'btn-mini borrar';
         btnBorrar.textContent = 'Eliminar';
         btnBorrar.addEventListener('click', async () => {
-          if (!confirm('¿Eliminar la cuenta "' + c.nombre + '"?')) return;
+          if (!(await confirmarAccion('¿Eliminar la cuenta "' + c.nombre + '"?'))) return;
           try {
             const res = await eliminarCuenta(c.id);
             datos.cuentas = res.cuentas;
@@ -2472,7 +2546,7 @@
     });
 
     document.getElementById('btn-logout').addEventListener('click', async () => {
-      if (!confirm('¿Cerrar sesión?')) return;
+      if (!(await confirmarAccion('¿Cerrar sesión?'))) return;
       await sb.auth.signOut();
       location.reload();
     });
