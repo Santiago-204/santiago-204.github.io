@@ -450,6 +450,16 @@
     #pantalla-login img { width: 64px; height: 64px; border-radius: 14px; background: #fff; }
     #pantalla-login p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
     #pantalla-login .field { text-align: left; }
+    .btn-link-registro {
+      background: none;
+      border: none;
+      color: var(--paper-dim);
+      text-decoration: underline;
+      font-size: 0.8rem;
+      cursor: pointer;
+      margin-top: 6px;
+      font-family: 'Manrope', sans-serif;
+    }
 
     /* ---------- Panel de configuración (hamburguesa) ---------- */
     #fondo-panel-config {
@@ -650,13 +660,22 @@
 
   <div id="pantalla-login">
     <img src="icon.png" alt="">
-    <p>Inicia sesión para entrar a Vigía</p>
+    <p id="titulo-login">Inicia sesión para entrar a Vigía</p>
     <form id="form-login" style="width:100%; max-width:280px; display:flex; flex-direction:column; gap:14px;">
       <div class="field"><label>Correo</label><input type="email" id="login-correo" required autocomplete="username"></div>
       <div class="field"><label>Contraseña</label><input type="password" id="login-clave" required autocomplete="current-password"></div>
       <button type="submit" class="primario">Entrar</button>
       <p id="msg-login" class="msg error" style="display:none;"></p>
     </form>
+    <button id="btn-mostrar-registro" type="button" class="btn-link-registro">¿No tienes cuenta? Regístrate</button>
+
+    <form id="form-registro" style="display:none; width:100%; max-width:280px; flex-direction:column; gap:14px;">
+      <div class="field"><label>Correo</label><input type="email" id="registro-correo" required autocomplete="username"></div>
+      <div class="field"><label>Contraseña (mínimo 6 caracteres)</label><input type="password" id="registro-clave" required minlength="6" autocomplete="new-password"></div>
+      <button type="submit" class="primario">Crear cuenta</button>
+      <p id="msg-registro" class="msg error" style="display:none;"></p>
+    </form>
+    <button id="btn-mostrar-login" type="button" class="btn-link-registro" style="display:none;">¿Ya tienes cuenta? Inicia sesión</button>
   </div>
 
   <div id="fondo-panel-config"></div>
@@ -1091,6 +1110,18 @@
       const { data, error } = await sb.from('categorias').select('nombre').order('nombre');
       if (error) throw error;
       return data.map(r => r.nombre);
+    }
+
+    /** Si la cuenta que inició sesión no tiene ninguna categoría propia
+     *  todavía (típico de una cuenta recién creada por alguien más que
+     *  se registró), le crea las 7 básicas — si no, el desplegable de
+     *  "Agregar gasto" le saldría vacío la primera vez. */
+    async function sembrarCategoriasSiVacio_() {
+      const existentes = await getCategorias();
+      if (existentes.length > 0) return existentes;
+      const predeterminadas = ['Gastos de la casa', 'Pasajes', 'Comida', 'Salud', 'Entretenimiento', 'Educación', 'Otros'];
+      await sb.from('categorias').insert(predeterminadas.map(nombre => ({ nombre })));
+      return await getCategorias();
     }
 
     async function agregarCategoria(nombre) {
@@ -1530,7 +1561,7 @@
     async function getDatosIniciales() {
       const mesActual = claveMes_();
       const [categorias, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial] = await Promise.all([
-        getCategorias(), listarMesesDisponibles(), getResumenMensual(mesActual),
+        sembrarCategoriasSiVacio_(), listarMesesDisponibles(), getResumenMensual(mesActual),
         getMovimientosDeMes(mesActual), getDeudas(), getCuentas(), getPorCobrar(), getHistorialMensual(6)
       ]);
       return { categorias, mesActual, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial };
@@ -2692,6 +2723,53 @@
       }
       document.getElementById('pantalla-login').classList.remove('activa');
       cargarDatos();
+    });
+
+    // ---------- Alternar entre login y registro ----------
+    document.getElementById('btn-mostrar-registro').addEventListener('click', () => {
+      document.getElementById('form-login').style.display = 'none';
+      document.getElementById('btn-mostrar-registro').style.display = 'none';
+      document.getElementById('form-registro').style.display = 'flex';
+      document.getElementById('btn-mostrar-login').style.display = 'block';
+      document.getElementById('titulo-login').textContent = 'Crea tu cuenta para entrar a Vigía';
+    });
+    document.getElementById('btn-mostrar-login').addEventListener('click', () => {
+      document.getElementById('form-registro').style.display = 'none';
+      document.getElementById('btn-mostrar-login').style.display = 'none';
+      document.getElementById('form-login').style.display = 'flex';
+      document.getElementById('btn-mostrar-registro').style.display = 'block';
+      document.getElementById('titulo-login').textContent = 'Inicia sesión para entrar a Vigía';
+    });
+
+    document.getElementById('form-registro').addEventListener('submit', async e => {
+      e.preventDefault();
+      const correo = document.getElementById('registro-correo').value.trim();
+      const clave = document.getElementById('registro-clave').value;
+      const msg = document.getElementById('msg-registro');
+      msg.style.display = 'none';
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Creando...';
+      const { data, error } = await sb.auth.signUp({ email: correo, password: clave });
+      btnSubmit.disabled = false;
+      btnSubmit.textContent = 'Crear cuenta';
+      if (error) {
+        msg.className = 'msg error';
+        msg.textContent = error.message;
+        msg.style.display = 'block';
+        return;
+      }
+      if (data.session) {
+        // El proyecto no exige confirmar el correo: ya quedó con sesión activa.
+        document.getElementById('pantalla-login').classList.remove('activa');
+        cargarDatos();
+      } else {
+        msg.className = 'msg ok';
+        msg.textContent = 'Cuenta creada. Revisa tu correo para confirmarla y luego inicia sesión.';
+        msg.style.display = 'block';
+        e.target.reset();
+      }
     });
 
     document.getElementById('btn-logout').addEventListener('click', async () => {
