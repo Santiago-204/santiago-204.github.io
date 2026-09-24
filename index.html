@@ -1149,11 +1149,12 @@
       return { ok: true, cuentas: await getCuentas() };
     }
 
-    async function agregarIngreso(fecha, descripcion, monto, tipo, cuentaId) {
+    async function agregarIngreso(fecha, descripcion, monto, tipo, cuentaId, porCobrarId) {
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
       const { error } = await sb.from('ingresos').insert({
         fecha, descripcion, monto: Number(monto) || 0, tipo,
-        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
+        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta,
+        por_cobrar_id: porCobrarId || null
       });
       if (error) throw error;
       await ajustarSaldoCuenta_(cuentaId, Number(monto) || 0);
@@ -1167,11 +1168,12 @@
       };
     }
 
-    async function agregarGasto(fecha, categoria, descripcion, monto, cuentaId) {
+    async function agregarGasto(fecha, categoria, descripcion, monto, cuentaId, deudaId) {
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
       const { error } = await sb.from('gastos').insert({
         fecha, categoria, descripcion, monto: Number(monto) || 0,
-        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
+        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta,
+        deuda_id: deudaId || null
       });
       if (error) throw error;
       await ajustarSaldoCuenta_(cuentaId, -(Number(monto) || 0));
@@ -1185,28 +1187,73 @@
       };
     }
 
-    /** Elimina un ingreso y revierte lo que le había sumado a su cuenta
-     *  (si tenía una asociada). */
+    /** Suma (o resta, con delta negativo) al monto_pagado de una deuda —
+     *  usada tanto para revertir un abono eliminado (delta negativo, el
+     *  monto completo) como para ajustar uno editado (delta = diferencia).
+     *  Recalcula "pagada" y reprograma/cancela el aviso si corresponde. */
+    async function ajustarAbonoDeuda_(deudaId, delta) {
+      if (!deudaId || !delta) return;
+      const { data: deuda } = await sb.from('deudas').select('monto, monto_pagado, pagada, descripcion, fecha_vencimiento').eq('id', deudaId).maybeSingle();
+      if (!deuda) return;
+      const nuevoMontoPagado = Math.max((Number(deuda.monto_pagado) || 0) + delta, 0);
+      const monto = Number(deuda.monto) || 0;
+      const pagadaCompleta = monto > 0 && nuevoMontoPagado >= monto;
+      await sb.from('deudas').update({ monto_pagado: nuevoMontoPagado, pagada: pagadaCompleta }).eq('id', deudaId);
+      if (deuda.pagada && !pagadaCompleta && deuda.fecha_vencimiento) {
+        await programarNotificacion_(deudaId, 'Deuda por vencer', deuda.descripcion + ' vence mañana', deuda.fecha_vencimiento);
+      } else if (!deuda.pagada && pagadaCompleta) {
+        await cancelarNotificacion_(deudaId);
+      }
+    }
+
+    /** Simétrico a ajustarAbonoDeuda_, para cobros pendientes. */
+    async function ajustarAbonoCobro_(porCobrarId, delta) {
+      if (!porCobrarId || !delta) return;
+      const { data: fila } = await sb.from('por_cobrar').select('monto, monto_cobrado, cobrada, nombre, fecha_limite').eq('id', porCobrarId).maybeSingle();
+      if (!fila) return;
+      const nuevoMontoCobrado = Math.max((Number(fila.monto_cobrado) || 0) + delta, 0);
+      const monto = Number(fila.monto) || 0;
+      const cobradaCompleta = monto > 0 && nuevoMontoCobrado >= monto;
+      await sb.from('por_cobrar').update({ monto_cobrado: nuevoMontoCobrado, cobrada: cobradaCompleta }).eq('id', porCobrarId);
+      if (fila.cobrada && !cobradaCompleta && fila.fecha_limite) {
+        await programarNotificacion_(porCobrarId, 'Cobro por vencer', fila.nombre + ' te paga mañana', fila.fecha_limite);
+      } else if (!fila.cobrada && cobradaCompleta) {
+        await cancelarNotificacion_(porCobrarId);
+      }
+    }
+
+    /** Elimina un ingreso: revierte lo que le había sumado a su cuenta, y
+     *  si venía de un abono a un cobro pendiente, también le resta ese
+     *  monto a lo ya cobrado (para que vuelva a quedar pendiente). */
     async function eliminarIngreso(id) {
-      const { data: fila } = await sb.from('ingresos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      const { data: fila } = await sb.from('ingresos').select('monto, cuenta_id, por_cobrar_id').eq('id', id).maybeSingle();
       await sb.from('ingresos').delete().eq('id', id);
-      if (fila) await ajustarSaldoCuenta_(fila.cuenta_id, -(Number(fila.monto) || 0));
+      if (fila) {
+        await ajustarSaldoCuenta_(fila.cuenta_id, -(Number(fila.monto) || 0));
+        if (fila.por_cobrar_id) await ajustarAbonoCobro_(fila.por_cobrar_id, -(Number(fila.monto) || 0));
+      }
       return { ok: true, cuentas: await getCuentas() };
     }
 
-    /** Elimina un gasto y revierte lo que le había restado a su cuenta. */
+    /** Elimina un gasto: revierte lo que le había restado a su cuenta, y
+     *  si venía de un abono a una deuda, también le resta ese monto a lo
+     *  ya abonado (para que vuelva a quedar pendiente). */
     async function eliminarGasto(id) {
-      const { data: fila } = await sb.from('gastos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      const { data: fila } = await sb.from('gastos').select('monto, cuenta_id, deuda_id').eq('id', id).maybeSingle();
       await sb.from('gastos').delete().eq('id', id);
-      if (fila) await ajustarSaldoCuenta_(fila.cuenta_id, Number(fila.monto) || 0);
+      if (fila) {
+        await ajustarSaldoCuenta_(fila.cuenta_id, Number(fila.monto) || 0);
+        if (fila.deuda_id) await ajustarAbonoDeuda_(fila.deuda_id, -(Number(fila.monto) || 0));
+      }
       return { ok: true, cuentas: await getCuentas() };
     }
 
     /** Edita un ingreso ya guardado: primero revierte el efecto que tenía
      *  en su cuenta ORIGINAL, guarda los datos nuevos, y aplica el efecto
-     *  en la cuenta NUEVA (puede ser la misma u otra distinta). */
+     *  en la cuenta NUEVA (puede ser la misma u otra distinta). Si venía de
+     *  un abono a un cobro, también ajusta ese cobro por la diferencia. */
     async function editarIngreso(id, fecha, descripcion, monto, cuentaId) {
-      const { data: original } = await sb.from('ingresos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      const { data: original } = await sb.from('ingresos').select('monto, cuenta_id, por_cobrar_id').eq('id', id).maybeSingle();
       if (!original) return { ok: false, error: 'No se encontró el ingreso' };
       await ajustarSaldoCuenta_(original.cuenta_id, -(Number(original.monto) || 0));
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
@@ -1216,12 +1263,16 @@
       }).eq('id', id);
       if (error) throw error;
       await ajustarSaldoCuenta_(cuentaId, Number(monto) || 0);
+      if (original.por_cobrar_id) {
+        const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
+        await ajustarAbonoCobro_(original.por_cobrar_id, delta);
+      }
       return { ok: true, cuentas: await getCuentas() };
     }
 
     /** Simétrico a editarIngreso, para gastos. */
     async function editarGasto(id, fecha, categoria, descripcion, monto, cuentaId) {
-      const { data: original } = await sb.from('gastos').select('monto, cuenta_id').eq('id', id).maybeSingle();
+      const { data: original } = await sb.from('gastos').select('monto, cuenta_id, deuda_id').eq('id', id).maybeSingle();
       if (!original) return { ok: false, error: 'No se encontró el gasto' };
       await ajustarSaldoCuenta_(original.cuenta_id, Number(original.monto) || 0);
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
@@ -1231,6 +1282,10 @@
       }).eq('id', id);
       if (error) throw error;
       await ajustarSaldoCuenta_(cuentaId, -(Number(monto) || 0));
+      if (original.deuda_id) {
+        const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
+        await ajustarAbonoDeuda_(original.deuda_id, delta);
+      }
       return { ok: true, cuentas: await getCuentas() };
     }
 
@@ -1400,7 +1455,7 @@
       if (pagadaCompleta) await cancelarNotificacion_(id);
       await agregarGasto(
         new Date().toISOString().split('T')[0], 'Pago de deudas',
-        'Abono: ' + fila.descripcion, abono, cuentaId
+        'Abono: ' + fila.descripcion, abono, cuentaId, id
       );
       return { ok: true, deudas: await getDeudas(), cuentas: await getCuentas() };
     }
@@ -1461,7 +1516,7 @@
       await agregarIngreso(
         new Date().toISOString().split('T')[0],
         'Abono: ' + fila.nombre + (fila.descripcion ? ' — ' + fila.descripcion : ''),
-        abono, 'Cobro', cuentaId
+        abono, 'Cobro', cuentaId, id
       );
       return { ok: true, porCobrar: await getPorCobrar(), cuentas: await getCuentas() };
     }
