@@ -898,7 +898,7 @@
     const formatoMoneda = n => '$' + Math.round(n || 0).toLocaleString('es-CO');
 
     document.getElementById('fecha-actual').textContent =
-      new Date().toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
+      new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
 
     // ---------- Tema claro / oscuro ----------
     document.getElementById('btn-tema').addEventListener('click', () => {
