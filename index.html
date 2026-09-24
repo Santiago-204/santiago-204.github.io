@@ -1653,11 +1653,12 @@
     function renderMovimientos(lista) {
       const cont = document.getElementById('lista-movimientos');
       cont.innerHTML = '';
-      if (lista.length === 0) {
+      if (!lista || lista.length === 0) {
         cont.innerHTML = '<p class="sin-datos">Sin movimientos todavía.</p>';
         return;
       }
       lista.forEach(m => {
+        try {
         const fecha = new Date(m.fecha).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
         const hora = m.creadoEn
           ? new Date(m.creadoEn).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
@@ -1711,6 +1712,9 @@
         div.appendChild(infoDiv);
         div.appendChild(accionesDiv);
         cont.appendChild(div);
+        } catch (err) {
+          console.error('Error renderizando un movimiento, se omite esa fila:', m, err);
+        }
       });
     }
 
@@ -2410,6 +2414,8 @@
         const res = await agregarGasto(fecha, categoria, descripcion, monto, cuentaId);
         document.activeElement.blur();
         if (res.mes === mesSeleccionado) {
+          datos.resumen = res.resumen;
+          datos.movimientos = res.movimientos;
           renderResumen(res.resumen);
           renderMovimientos(res.movimientos);
         }
@@ -2438,6 +2444,8 @@
         const res = await agregarIngreso(fecha, descripcion, monto, 'Extra', cuentaId);
         document.activeElement.blur();
         if (res.mes === mesSeleccionado) {
+          datos.resumen = res.resumen;
+          datos.movimientos = res.movimientos;
           renderResumen(res.resumen);
           renderMovimientos(res.movimientos);
         }
