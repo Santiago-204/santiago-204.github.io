@@ -1232,7 +1232,7 @@
         await ajustarSaldoCuenta_(fila.cuenta_id, -(Number(fila.monto) || 0));
         if (fila.por_cobrar_id) await ajustarAbonoCobro_(fila.por_cobrar_id, -(Number(fila.monto) || 0));
       }
-      return { ok: true, cuentas: await getCuentas() };
+      return { ok: true, cuentas: await getCuentas(), porCobrar: await getPorCobrar() };
     }
 
     /** Elimina un gasto: revierte lo que le había restado a su cuenta, y
@@ -1245,7 +1245,7 @@
         await ajustarSaldoCuenta_(fila.cuenta_id, Number(fila.monto) || 0);
         if (fila.deuda_id) await ajustarAbonoDeuda_(fila.deuda_id, -(Number(fila.monto) || 0));
       }
-      return { ok: true, cuentas: await getCuentas() };
+      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas() };
     }
 
     /** Edita un ingreso ya guardado: primero revierte el efecto que tenía
@@ -1267,7 +1267,7 @@
         const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
         await ajustarAbonoCobro_(original.por_cobrar_id, delta);
       }
-      return { ok: true, cuentas: await getCuentas() };
+      return { ok: true, cuentas: await getCuentas(), porCobrar: await getPorCobrar() };
     }
 
     /** Simétrico a editarIngreso, para gastos. */
@@ -1286,7 +1286,7 @@
         const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
         await ajustarAbonoDeuda_(original.deuda_id, delta);
       }
-      return { ok: true, cuentas: await getCuentas() };
+      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas() };
     }
 
     async function listarMesesDisponibles() {
@@ -1756,6 +1756,14 @@
               const res = m.tipo === 'gasto' ? await eliminarGasto(m.id) : await eliminarIngreso(m.id);
               datos.cuentas = res.cuentas;
               renderCuentas(res.cuentas);
+              if (m.tipo === 'gasto' && res.deudas) {
+                datos.deudas = res.deudas;
+                renderDeudas(res.deudas);
+              }
+              if (m.tipo === 'ingreso' && res.porCobrar) {
+                datos.porCobrar = res.porCobrar;
+                renderPorCobrar(res.porCobrar);
+              }
               cargarResumenDeMes(mesSeleccionado);
               actualizarListaMeses();
           } catch (err) { alert(err.message); }
@@ -1862,6 +1870,14 @@
           }
           datos.cuentas = res.cuentas;
           renderCuentas(res.cuentas);
+          if (esGasto && res.deudas) {
+            datos.deudas = res.deudas;
+            renderDeudas(res.deudas);
+          }
+          if (!esGasto && res.porCobrar) {
+            datos.porCobrar = res.porCobrar;
+            renderPorCobrar(res.porCobrar);
+          }
           cargarResumenDeMes(mesSeleccionado);
           actualizarListaMeses();
         } catch (err) {
