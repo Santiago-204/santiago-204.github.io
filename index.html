@@ -1839,6 +1839,7 @@
       btnGuardar.className = 'btn-mini ok';
       btnGuardar.textContent = 'Guardar';
       btnGuardar.addEventListener('click', async () => {
+        if (btnGuardar.disabled) return;
         const fecha = inputFecha.value;
         const descripcion = inputDesc.value.trim();
         const monto = Number(inputMonto.value) || 0;
@@ -1847,16 +1848,27 @@
           alert('Revisa la fecha, la descripción y el monto');
           return;
         }
+        btnGuardar.disabled = true;
+        btnGuardar.textContent = 'Guardando...';
         try {
           const res = esGasto
             ? await editarGasto(m.id, fecha, selectCategoria.value, descripcion, monto, cuentaId)
             : await editarIngreso(m.id, fecha, descripcion, monto, cuentaId);
-          if (!res.ok) { alert(res.error || 'No se pudo guardar'); return; }
+          if (!res.ok) {
+            alert(res.error || 'No se pudo guardar');
+            btnGuardar.disabled = false;
+            btnGuardar.textContent = 'Guardar';
+            return;
+          }
           datos.cuentas = res.cuentas;
           renderCuentas(res.cuentas);
           cargarResumenDeMes(mesSeleccionado);
           actualizarListaMeses();
-        } catch (err) { alert(err.message); }
+        } catch (err) {
+          alert(err.message);
+          btnGuardar.disabled = false;
+          btnGuardar.textContent = 'Guardar';
+        }
       });
 
       const btnCancelar = document.createElement('button');
@@ -1988,9 +2000,12 @@
       btnConfirmar.className = 'btn-mini ok';
       btnConfirmar.textContent = 'Confirmar abono';
       btnConfirmar.addEventListener('click', async () => {
+        if (btnConfirmar.disabled) return;
         const monto = Number(inputMonto.value) || 0;
         if (monto <= 0) { mostrarMensaje('msg-deuda', 'Pon un monto mayor a cero', 'error'); return; }
         if (!selectCuenta.value) { mostrarMensaje('msg-deuda', 'Selecciona de qué cuenta sale el abono', 'error'); return; }
+        btnConfirmar.disabled = true;
+        btnConfirmar.textContent = 'Guardando...';
         try {
           const res = await abonarDeuda(deuda.id, monto, selectCuenta.value);
           datos.deudas = res.deudas;
@@ -1999,7 +2014,11 @@
           renderCuentas(res.cuentas);
           renderCuentasSelect();
           cargarResumenDeMes(mesSeleccionado);
-        } catch (err) { mostrarMensaje('msg-deuda', err.message, 'error'); }
+        } catch (err) {
+          mostrarMensaje('msg-deuda', err.message, 'error');
+          btnConfirmar.disabled = false;
+          btnConfirmar.textContent = 'Confirmar abono';
+        }
       });
 
       const btnCancelar = document.createElement('button');
@@ -2037,14 +2056,21 @@
       btnConfirmar.className = 'btn-mini ok';
       btnConfirmar.textContent = 'Confirmar';
       btnConfirmar.addEventListener('click', async () => {
+        if (btnConfirmar.disabled) return;
         const monto = Number(inputMonto.value) || 0;
         if (monto <= 0) { mostrarMensaje('msg-deuda', 'Pon un monto mayor a cero', 'error'); return; }
+        btnConfirmar.disabled = true;
+        btnConfirmar.textContent = 'Guardando...';
         try {
           const res = await aumentarDeuda(deuda.id, monto);
           datos.deudas = res.deudas;
           renderDeudas(res.deudas);
           cargarResumenDeMes(mesSeleccionado);
-        } catch (err) { mostrarMensaje('msg-deuda', err.message, 'error'); }
+        } catch (err) {
+          mostrarMensaje('msg-deuda', err.message, 'error');
+          btnConfirmar.disabled = false;
+          btnConfirmar.textContent = 'Confirmar';
+        }
       });
 
       const btnCancelar = document.createElement('button');
@@ -2065,6 +2091,9 @@
       const descripcion = document.getElementById('deuda-descripcion').value;
       const monto = document.getElementById('deuda-monto').value;
       const fecha = document.getElementById('deuda-fecha').value;
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
 
       try {
         const res = await agregarDeuda(descripcion, monto, fecha);
@@ -2074,6 +2103,7 @@
         mostrarMensaje('msg-deuda', 'Deuda guardada', 'ok');
         e.target.reset();
       } catch (err) { mostrarMensaje('msg-deuda', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
     });
 
     // ---------- Me deben (PorCobrar) ----------
@@ -2177,9 +2207,12 @@
       btnConfirmar.className = 'btn-mini ok';
       btnConfirmar.textContent = 'Confirmar abono';
       btnConfirmar.addEventListener('click', async () => {
+        if (btnConfirmar.disabled) return;
         const monto = Number(inputMonto.value) || 0;
         if (monto <= 0) { mostrarMensaje('msg-por-cobrar', 'Pon un monto mayor a cero', 'error'); return; }
         if (!select.value) { mostrarMensaje('msg-por-cobrar', 'Selecciona a qué cuenta entra el abono', 'error'); return; }
+        btnConfirmar.disabled = true;
+        btnConfirmar.textContent = 'Guardando...';
         try {
           const res = await abonarCobro(cobro.id, monto, select.value);
           datos.porCobrar = res.porCobrar;
@@ -2188,7 +2221,11 @@
           renderCuentas(res.cuentas);
           renderCuentasSelect();
           cargarResumenDeMes(mesSeleccionado);
-        } catch (err) { mostrarMensaje('msg-por-cobrar', err.message, 'error'); }
+        } catch (err) {
+          mostrarMensaje('msg-por-cobrar', err.message, 'error');
+          btnConfirmar.disabled = false;
+          btnConfirmar.textContent = 'Confirmar abono';
+        }
       });
 
       const btnCancelar = document.createElement('button');
@@ -2211,6 +2248,9 @@
       const descripcion = document.getElementById('cobrar-descripcion').value;
       const monto = document.getElementById('cobrar-monto').value;
       const fecha = document.getElementById('cobrar-fecha').value;
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
 
       try {
         const res = await agregarPorCobrar(nombre, descripcion, monto, fecha);
@@ -2220,6 +2260,7 @@
         mostrarMensaje('msg-por-cobrar', 'Cobro pendiente guardado', 'ok');
         e.target.reset();
       } catch (err) { mostrarMensaje('msg-por-cobrar', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
     });
 
     // ---------- Cuentas ----------
@@ -2375,6 +2416,9 @@
       botonesDiv.className = 'mov-acciones-botones';
 
       const ejecutar = async (generarMovimiento) => {
+        if (btnMovimiento.disabled) return;
+        btnMovimiento.disabled = true;
+        btnCorreccion.disabled = true;
         try {
           const res = await actualizarSaldoCuenta(cuenta.id, nuevoSaldo, generarMovimiento);
           datos.cuentas = res.cuentas;
@@ -2383,7 +2427,11 @@
             cargarResumenDeMes(mesSeleccionado);
             actualizarListaMeses();
           }
-        } catch (err) { mostrarMensaje('msg-cuenta', err.message, 'error'); }
+        } catch (err) {
+          mostrarMensaje('msg-cuenta', err.message, 'error');
+          btnMovimiento.disabled = false;
+          btnCorreccion.disabled = false;
+        }
       };
 
       const btnMovimiento = document.createElement('button');
@@ -2438,6 +2486,9 @@
       e.preventDefault();
       const nombre = document.getElementById('cuenta-nombre').value;
       const saldo = document.getElementById('cuenta-saldo').value;
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
       try {
         const res = await agregarCuenta(nombre, saldo);
         if (!res.ok) {
@@ -2450,6 +2501,7 @@
         mostrarMensaje('msg-cuenta', 'Cuenta guardada', 'ok');
         e.target.reset();
       } catch (err) { mostrarMensaje('msg-cuenta', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
     });
 
     document.getElementById('form-gasto').addEventListener('submit', async e => {
@@ -2465,6 +2517,9 @@
           : 'Primero crea una cuenta en la pestaña Cuentas', 'error');
         return;
       }
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
       try {
         const res = await agregarGasto(fecha, categoria, descripcion, monto, cuentaId);
         document.activeElement.blur();
@@ -2481,6 +2536,7 @@
         e.target.reset();
         document.getElementById('gasto-fecha').value = hoy;
       } catch (err) { mostrarMensaje('msg-gasto', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
     });
 
     document.getElementById('form-ingreso').addEventListener('submit', async e => {
@@ -2495,6 +2551,9 @@
           : 'Primero crea una cuenta en la pestaña Cuentas', 'error');
         return;
       }
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
       try {
         const res = await agregarIngreso(fecha, descripcion, monto, 'Extra', cuentaId);
         document.activeElement.blur();
@@ -2511,11 +2570,15 @@
         e.target.reset();
         document.getElementById('ingreso-fecha').value = hoy;
       } catch (err) { mostrarMensaje('msg-ingreso', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
     });
 
     document.getElementById('btn-nueva-categoria').addEventListener('click', async () => {
       const nombre = document.getElementById('nueva-categoria').value.trim();
       if (!nombre) return;
+      const btn = document.getElementById('btn-nueva-categoria');
+      if (btn.disabled) return;
+      btn.disabled = true;
       try {
         const res = await agregarCategoria(nombre);
         if (res.ok) {
@@ -2527,6 +2590,7 @@
           mostrarMensaje('msg-categoria', res.error || 'No se pudo agregar', 'error');
         }
       } catch (err) { mostrarMensaje('msg-categoria', err.message, 'error'); }
+      finally { btn.disabled = false; }
     });
 
     function mostrarMensaje(id, texto, tipo) {
@@ -2598,10 +2662,16 @@
       const clave = document.getElementById('login-clave').value;
       const msg = document.getElementById('msg-login');
       msg.style.display = 'none';
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Entrando...';
       const { error } = await sb.auth.signInWithPassword({ email: correo, password: clave });
       if (error) {
         msg.textContent = 'Correo o contraseña incorrectos';
         msg.style.display = 'block';
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Entrar';
         return;
       }
       document.getElementById('pantalla-login').classList.remove('activa');
