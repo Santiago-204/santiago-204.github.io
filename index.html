@@ -433,7 +433,7 @@
     #pantalla-bloqueo p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
     #pantalla-bloqueo .primario { padding: 12px 22px; margin-top: 6px; }
 
-    #pantalla-login {
+    #pantalla-login, #pantalla-nueva-clave {
       display: none;
       position: fixed;
       inset: 0;
@@ -446,10 +446,10 @@
       text-align: center;
       padding: 24px;
     }
-    #pantalla-login.activa { display: flex; }
-    #pantalla-login img { width: 64px; height: 64px; border-radius: 14px; background: #fff; }
-    #pantalla-login p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
-    #pantalla-login .field { text-align: left; }
+    #pantalla-login.activa, #pantalla-nueva-clave.activa { display: flex; }
+    #pantalla-login img, #pantalla-nueva-clave img { width: 64px; height: 64px; border-radius: 14px; background: #fff; }
+    #pantalla-login p, #pantalla-nueva-clave p { color: var(--paper-dim); font-size: 0.9rem; margin: 0; }
+    #pantalla-login .field, #pantalla-nueva-clave .field { text-align: left; }
     .btn-link-registro {
       background: none;
       border: none;
@@ -667,6 +667,7 @@
       <button type="submit" class="primario">Entrar</button>
       <p id="msg-login" class="msg error" style="display:none;"></p>
     </form>
+    <button id="btn-olvide-clave" type="button" class="btn-link-registro">¿Olvidaste tu contraseña?</button>
     <button id="btn-mostrar-registro" type="button" class="btn-link-registro">¿No tienes cuenta? Regístrate</button>
 
     <form id="form-registro" style="display:none; width:100%; max-width:280px; flex-direction:column; gap:14px;">
@@ -676,6 +677,16 @@
       <p id="msg-registro" class="msg error" style="display:none;"></p>
     </form>
     <button id="btn-mostrar-login" type="button" class="btn-link-registro" style="display:none;">¿Ya tienes cuenta? Inicia sesión</button>
+  </div>
+
+  <div id="pantalla-nueva-clave">
+    <img src="icon.png" alt="">
+    <p>Crea una contraseña nueva</p>
+    <form id="form-nueva-clave" style="width:100%; max-width:280px; display:flex; flex-direction:column; gap:14px;">
+      <div class="field"><label>Contraseña nueva (mínimo 6 caracteres)</label><input type="password" id="nueva-clave" required minlength="6" autocomplete="new-password"></div>
+      <button type="submit" class="primario">Guardar contraseña</button>
+      <p id="msg-nueva-clave" class="msg error" style="display:none;"></p>
+    </form>
   </div>
 
   <div id="fondo-panel-config"></div>
@@ -2772,13 +2783,79 @@
       }
     });
 
+    // ---------- Recuperar contraseña ----------
+    document.getElementById('btn-olvide-clave').addEventListener('click', async () => {
+      const correo = document.getElementById('login-correo').value.trim();
+      const msg = document.getElementById('msg-login');
+      if (!correo) {
+        msg.className = 'msg error';
+        msg.textContent = 'Escribe tu correo arriba primero';
+        msg.style.display = 'block';
+        return;
+      }
+      const btn = document.getElementById('btn-olvide-clave');
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const { error } = await sb.auth.resetPasswordForEmail(correo, {
+        redirectTo: window.location.origin + window.location.pathname
+      });
+      btn.disabled = false;
+      msg.style.display = 'block';
+      if (error) {
+        msg.className = 'msg error';
+        msg.textContent = error.message;
+      } else {
+        msg.className = 'msg ok';
+        msg.textContent = 'Si ese correo existe, te llegó un enlace para restablecer la contraseña.';
+      }
+    });
+
+    document.getElementById('form-nueva-clave').addEventListener('submit', async e => {
+      e.preventDefault();
+      const nueva = document.getElementById('nueva-clave').value;
+      const msg = document.getElementById('msg-nueva-clave');
+      msg.style.display = 'none';
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Guardando...';
+      const { error } = await sb.auth.updateUser({ password: nueva });
+      if (error) {
+        msg.className = 'msg error';
+        msg.textContent = error.message;
+        msg.style.display = 'block';
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Guardar contraseña';
+        return;
+      }
+      document.getElementById('pantalla-nueva-clave').classList.remove('activa');
+      cargarDatos();
+    });
+
     document.getElementById('btn-logout').addEventListener('click', async () => {
       if (!(await confirmarAccion('¿Cerrar sesión?'))) return;
       await sb.auth.signOut();
       location.reload();
     });
 
-    if (tieneBiometriaNativa_()) {
+    // Si el enlace de recuperación de contraseña trae a la app, Supabase
+    // dispara este evento apenas procesa el token que viene en la URL.
+    sb.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        document.getElementById('pantalla-bloqueo').classList.remove('activa');
+        document.getElementById('pantalla-login').classList.remove('activa');
+        document.getElementById('pantalla-nueva-clave').classList.add('activa');
+      }
+    });
+
+    // Revisamos la URL de una vez, sin esperar el evento de arriba (que es
+    // asíncrono) — así evitamos que el arranque normal (huella/sesión)
+    // alcance a mostrar otra pantalla antes de que el evento llegue.
+    const esFlujoDeRecuperacion = window.location.hash.includes('type=recovery');
+
+    if (esFlujoDeRecuperacion) {
+      document.getElementById('pantalla-nueva-clave').classList.add('activa');
+    } else if (tieneBiometriaNativa_()) {
       document.getElementById('pantalla-bloqueo').classList.add('activa');
       intentarDesbloqueo();
     } else {
