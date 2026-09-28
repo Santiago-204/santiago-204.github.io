@@ -508,6 +508,68 @@
       width: 100%;
     }
 
+    /* ---------- Panel de notas ---------- */
+    #fondo-panel-notas {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 1000;
+    }
+    #fondo-panel-notas.activo { display: block; }
+    #panel-notas {
+      display: none;
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 300px;
+      max-width: 84vw;
+      background: var(--surface-raised);
+      z-index: 1001;
+      flex-direction: column;
+      padding: 18px 16px;
+      box-shadow: -6px 0 24px rgba(0,0,0,0.3);
+      overflow-y: auto;
+    }
+    #panel-notas.activo { display: flex; }
+    #form-nota {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    #nota-texto {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--paper);
+      padding: 10px;
+      font-family: 'Manrope', sans-serif;
+      font-size: 0.86rem;
+      resize: vertical;
+    }
+    .nota-item {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .nota-texto {
+      color: var(--paper);
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      margin-bottom: 6px;
+    }
+    .nota-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nota-fecha {
+      color: var(--paper-faint);
+      font-size: 0.7rem;
+    }
+
     /* ---------- Modal de confirmación propio (reemplaza confirm()) ---------- */
     #fondo-confirmar {
       display: none;
@@ -684,12 +746,28 @@
       <h3>Configuración</h3>
       <button id="btn-cerrar-config" type="button" class="btn-tema" aria-label="Cerrar"><svg class="ico"><use href="#i-x"/></svg></button>
     </div>
+    <button id="btn-notas" type="button" class="panel-config-item">
+      <svg class="ico"><use href="#i-file"/></svg> Notas
+    </button>
     <button id="btn-tema" type="button" class="panel-config-item">
       <svg class="ico"><use href="#i-moon"/></svg> Cambiar tema
     </button>
     <button id="btn-logout" type="button" class="panel-config-item">
       <svg class="ico"><use href="#i-logout"/></svg> Cerrar sesión
     </button>
+  </div>
+
+  <div id="fondo-panel-notas"></div>
+  <div id="panel-notas">
+    <div class="panel-config-header">
+      <h3>Notas</h3>
+      <button id="btn-cerrar-notas" type="button" class="btn-tema" aria-label="Cerrar"><svg class="ico"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="form-nota">
+      <textarea id="nota-texto" rows="3" placeholder="Escribe una nota o recordatorio..."></textarea>
+      <button type="submit" class="primario">Agregar nota</button>
+    </form>
+    <div id="lista-notas"></div>
   </div>
 
   <div id="fondo-confirmar"></div>
@@ -967,6 +1045,97 @@
     });
     document.getElementById('btn-cerrar-config').addEventListener('click', cerrarPanelConfig);
     document.getElementById('fondo-panel-config').addEventListener('click', cerrarPanelConfig);
+
+    // ---------- Notas ----------
+    async function getNotas() {
+      const { data, error } = await sb.from('notas').select('id, texto, creado_en').order('creado_en', { ascending: false });
+      if (error) throw error;
+      return data;
+    }
+
+    async function agregarNota(texto) {
+      const { error } = await sb.from('notas').insert({ texto });
+      if (error) throw error;
+      return { ok: true, notas: await getNotas() };
+    }
+
+    async function eliminarNota(id) {
+      await sb.from('notas').delete().eq('id', id);
+      return { ok: true, notas: await getNotas() };
+    }
+
+    function renderNotas(lista) {
+      const cont = document.getElementById('lista-notas');
+      cont.innerHTML = '';
+      if (!lista || !lista.length) {
+        cont.innerHTML = '<p class="sin-datos">No tienes notas todavía.</p>';
+        return;
+      }
+      lista.forEach(n => {
+        const div = document.createElement('div');
+        div.className = 'nota-item';
+
+        const textoDiv = document.createElement('div');
+        textoDiv.className = 'nota-texto';
+        textoDiv.textContent = n.texto;
+
+        const meta = document.createElement('div');
+        meta.className = 'nota-meta';
+
+        const fechaSpan = document.createElement('span');
+        fechaSpan.className = 'nota-fecha';
+        fechaSpan.textContent = new Date(n.creado_en).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
+
+        const btnBorrar = document.createElement('button');
+        btnBorrar.type = 'button';
+        btnBorrar.className = 'btn-mini borrar';
+        btnBorrar.textContent = 'Eliminar';
+        btnBorrar.addEventListener('click', async () => {
+          if (!(await confirmarAccion('¿Eliminar esta nota?'))) return;
+          try {
+            const res = await eliminarNota(n.id);
+            renderNotas(res.notas);
+          } catch (err) { alert(err.message); }
+        });
+
+        meta.appendChild(fechaSpan);
+        meta.appendChild(btnBorrar);
+        div.appendChild(textoDiv);
+        div.appendChild(meta);
+        cont.appendChild(div);
+      });
+    }
+
+    document.getElementById('form-nota').addEventListener('submit', async e => {
+      e.preventDefault();
+      const texto = document.getElementById('nota-texto').value.trim();
+      if (!texto) return;
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
+      try {
+        const res = await agregarNota(texto);
+        renderNotas(res.notas);
+        e.target.reset();
+      } catch (err) { alert(err.message); }
+      finally { btnSubmit.disabled = false; }
+    });
+
+    function abrirPanelNotas() {
+      document.getElementById('panel-notas').classList.add('activo');
+      document.getElementById('fondo-panel-notas').classList.add('activo');
+      getNotas().then(renderNotas).catch(err => console.error(err));
+    }
+    function cerrarPanelNotas() {
+      document.getElementById('panel-notas').classList.remove('activo');
+      document.getElementById('fondo-panel-notas').classList.remove('activo');
+    }
+    document.getElementById('btn-notas').addEventListener('click', () => {
+      cerrarPanelConfig();
+      abrirPanelNotas();
+    });
+    document.getElementById('btn-cerrar-notas').addEventListener('click', cerrarPanelNotas);
+    document.getElementById('fondo-panel-notas').addEventListener('click', cerrarPanelNotas);
 
     document.querySelectorAll('nav.tabs button').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1379,6 +1548,17 @@
       });
     }
 
+    /** Vuelve a traer el histórico de 6 meses y lo redibuja — se llama
+     *  después de cualquier acción que pueda cambiar un total mensual
+     *  (agregar/editar/eliminar ingreso o gasto, incluidos abonos y
+     *  ajustes de saldo), para que no haga falta salir y volver a entrar. */
+    async function actualizarHistorial() {
+      try {
+        datos.historial = await getHistorialMensual(6);
+        renderHistorial(datos.historial);
+      } catch (e) { /* silencioso, no es crítico */ }
+    }
+
     async function getResumenMensual(mesKey) {
       const clave = mesKey || claveMes_();
       const { desde, hasta } = rangoDeMes_(clave);
@@ -1638,6 +1818,7 @@
         renderResumen(d.resumen);
         renderMovimientos(d.movimientos);
         if (datos.cuentas) renderCuentas(datos.cuentas);
+        actualizarHistorial();
       } catch (err) {
         onError(err);
       }
@@ -2579,6 +2760,7 @@
         datos.cuentas = res.cuentas;
         renderCuentas(res.cuentas);
         actualizarListaMeses();
+        actualizarHistorial();
         mostrarMensaje('msg-gasto', 'Gasto guardado', 'ok');
         e.target.reset();
         document.getElementById('gasto-fecha').value = hoy;
@@ -2613,6 +2795,7 @@
         datos.cuentas = res.cuentas;
         renderCuentas(res.cuentas);
         actualizarListaMeses();
+        actualizarHistorial();
         mostrarMensaje('msg-ingreso', 'Ingreso guardado', 'ok');
         e.target.reset();
         document.getElementById('ingreso-fecha').value = hoy;
