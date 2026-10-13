@@ -267,6 +267,24 @@
       border-radius: 999px;
       margin-left: 8px;
     }
+    .meta-card-aportes { margin-bottom: 10px; }
+    .meta-card-aporte-fila {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--paper-dim);
+      padding: 3px 0;
+    }
+    .meta-aporte-borrar {
+      background: none;
+      border: none;
+      color: var(--paper-faint);
+      cursor: pointer;
+      padding: 2px;
+      display: flex;
+      align-items: center;
+    }
 
     /* ---------- Histórico de varios meses ---------- */
     .historial-chart {
@@ -847,7 +865,10 @@
       <div class="block">
         <div class="block-header-fila">
           <h2><svg class="ico"><use href="#i-trending"/></svg> Metas de ahorro</h2>
-          <button id="btn-nueva-meta" type="button" class="btn-mini">Nueva meta</button>
+          <div style="display:flex; gap:8px;">
+            <button id="btn-editar-metas" type="button" class="btn-mini">Editar</button>
+            <button id="btn-nueva-meta" type="button" class="btn-mini">Nueva meta</button>
+          </div>
         </div>
         <form id="form-meta" style="display:none; flex-direction:column; gap:12px; margin-bottom:16px;">
           <div class="field"><label>Nombre</label><input type="text" id="meta-nombre" placeholder="Ej: Moto" required></div>
@@ -1045,6 +1066,7 @@
     let datos = null;
     let mesSeleccionado = null; // 'YYYY-MM' del mes que se está mostrando en Resumen
     let modoEdicionMovimientos = false; // controla si se ven los botones Editar/Eliminar en cada fila
+    let modoEdicionMetas = false; // controla si se ven los botones Abonar/Eliminar en cada meta
     const paletaCategorias = ['#707070', '#8C8C8C', '#5A5A5A', '#A3A3A3', '#454545', '#B8B8B8'];
     const iconosCategorias = {
       'Gastos de la casa': 'i-home',
@@ -1844,17 +1866,29 @@
      * METAS DE AHORRO
      * ========================================================= */
 
+    /** Trae las metas junto con sus aportes (cada aporte es "tengo $X de
+     *  esto en la cuenta Y") agrupados por meta, más recientes primero. */
     async function getMetas() {
-      const { data, error } = await sb.from('metas').select('id, nombre, monto_objetivo, monto_ahorrado, fecha_objetivo, cumplida, creado_en, cuenta_id, cuenta_nombre').order('creado_en', { ascending: false });
-      if (error) throw error;
-      return (data || []).map(m => ({
+      const [{ data: metasData, error: errorMetas }, { data: aportesData, error: errorAportes }] = await Promise.all([
+        sb.from('metas').select('id, nombre, monto_objetivo, monto_ahorrado, fecha_objetivo, cumplida, creado_en').order('creado_en', { ascending: false }),
+        sb.from('aportes_meta').select('id, meta_id, cuenta_nombre, monto, creado_en').order('creado_en', { ascending: false })
+      ]);
+      if (errorMetas) throw errorMetas;
+      if (errorAportes) throw errorAportes;
+
+      const aportesPorMeta = {};
+      (aportesData || []).forEach(a => {
+        if (!aportesPorMeta[a.meta_id]) aportesPorMeta[a.meta_id] = [];
+        aportesPorMeta[a.meta_id].push({ id: a.id, cuenta: a.cuenta_nombre || '', monto: Number(a.monto) || 0 });
+      });
+
+      return (metasData || []).map(m => ({
         id: m.id, nombre: m.nombre,
         montoObjetivo: Number(m.monto_objetivo) || 0,
         montoAhorrado: Number(m.monto_ahorrado) || 0,
         fechaObjetivo: m.fecha_objetivo,
         cumplida: m.cumplida,
-        cuentaId: m.cuenta_id || '',
-        cuenta: m.cuenta_nombre || ''
+        aportes: aportesPorMeta[m.id] || []
       }));
     }
 
@@ -1874,20 +1908,38 @@
     }
 
     /** Abona a una meta: NO genera ningún movimiento real ni toca el
-     *  saldo de ninguna cuenta — solo suma al progreso ahorrado y guarda
-     *  en qué cuenta está esa plata, como referencia ("la tengo en Nu,
-     *  apartada para esto"). Se marca cumplida al llegar al 100%. */
+     *  saldo de ninguna cuenta — guarda un aporte nuevo (cuánto, en qué
+     *  cuenta) y suma ese monto al progreso ahorrado. Una meta puede
+     *  tener varios aportes en cuentas distintas (parte en Nu, parte en
+     *  Bolsillo, etc.) — cada uno queda como su propia fila, no se
+     *  sobreescriben entre sí. Se marca cumplida al llegar al 100%. */
     async function abonarMeta(id, montoAbono, cuentaId) {
       const { data: meta } = await sb.from('metas').select('monto_objetivo, monto_ahorrado').eq('id', id).maybeSingle();
       if (!meta) return { ok: false, error: 'No se encontró la meta' };
       const abono = Number(montoAbono) || 0;
+      const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
+      const { error } = await sb.from('aportes_meta').insert({
+        meta_id: id, cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta, monto: abono
+      });
+      if (error) throw error;
       const nuevoMontoAhorrado = (Number(meta.monto_ahorrado) || 0) + abono;
       const cumplida = nuevoMontoAhorrado >= (Number(meta.monto_objetivo) || 0);
-      const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
-      await sb.from('metas').update({
-        monto_ahorrado: nuevoMontoAhorrado, cumplida,
-        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
-      }).eq('id', id);
+      await sb.from('metas').update({ monto_ahorrado: nuevoMontoAhorrado, cumplida }).eq('id', id);
+      return { ok: true, metas: await getMetas() };
+    }
+
+    /** Elimina un aporte puntual (por ejemplo, si lo pusiste por error) y
+     *  resta ese monto del progreso ahorrado de su meta. */
+    async function eliminarAporteMeta(aporteId) {
+      const { data: aporte } = await sb.from('aportes_meta').select('meta_id, monto').eq('id', aporteId).maybeSingle();
+      if (!aporte) return { ok: false, error: 'No se encontró el aporte' };
+      await sb.from('aportes_meta').delete().eq('id', aporteId);
+      const { data: meta } = await sb.from('metas').select('monto_objetivo, monto_ahorrado').eq('id', aporte.meta_id).maybeSingle();
+      if (meta) {
+        const nuevoMontoAhorrado = Math.max((Number(meta.monto_ahorrado) || 0) - (Number(aporte.monto) || 0), 0);
+        const cumplida = nuevoMontoAhorrado >= (Number(meta.monto_objetivo) || 0) && (Number(meta.monto_objetivo) || 0) > 0;
+        await sb.from('metas').update({ monto_ahorrado: nuevoMontoAhorrado, cumplida }).eq('id', aporte.meta_id);
+      }
       return { ok: true, metas: await getMetas() };
     }
 
@@ -2127,47 +2179,76 @@
           div.appendChild(fechaDiv);
         }
 
-        if (m.cuenta && m.montoAhorrado > 0) {
-          const cuentaDiv = document.createElement('div');
-          cuentaDiv.className = 'meta-card-fecha';
-          cuentaDiv.innerHTML = '<svg class="ico ico-mini"><use href="#i-bank"/></svg> Apartada en ' + m.cuenta;
-          div.appendChild(cuentaDiv);
+        if (m.aportes && m.aportes.length > 0) {
+          const aportesDiv = document.createElement('div');
+          aportesDiv.className = 'meta-card-aportes';
+          m.aportes.forEach(a => {
+            const fila = document.createElement('div');
+            fila.className = 'meta-card-aporte-fila';
+
+            const texto = document.createElement('span');
+            texto.innerHTML = '<svg class="ico ico-mini"><use href="#i-bank"/></svg> ' + (a.cuenta || 'Sin cuenta') + ': ' + formatoMoneda(a.monto);
+            fila.appendChild(texto);
+
+            if (modoEdicionMetas) {
+              const btnX = document.createElement('button');
+              btnX.type = 'button';
+              btnX.className = 'meta-aporte-borrar';
+              btnX.innerHTML = '<svg class="ico ico-mini"><use href="#i-x"/></svg>';
+              btnX.title = 'Eliminar este aporte';
+              btnX.addEventListener('click', async () => {
+                if (!(await confirmarAccion('¿Eliminar este aporte de ' + formatoMoneda(a.monto) + '?'))) return;
+                try {
+                  const res = await eliminarAporteMeta(a.id);
+                  datos.metas = res.metas;
+                  renderMetas(res.metas);
+                } catch (err) { alert(err.message); }
+              });
+              fila.appendChild(btnX);
+            }
+
+            aportesDiv.appendChild(fila);
+          });
+          div.appendChild(aportesDiv);
         }
 
-        const accionesDiv = document.createElement('div');
-        accionesDiv.className = 'mov-acciones';
-        accionesDiv.style.width = '100%';
+        if (modoEdicionMetas) {
+          const accionesDiv = document.createElement('div');
+          accionesDiv.className = 'mov-acciones';
+          accionesDiv.style.width = '100%';
 
-        const botonesDiv = document.createElement('div');
-        botonesDiv.className = 'mov-acciones-botones';
-        botonesDiv.style.justifyContent = 'flex-end';
-        botonesDiv.style.width = '100%';
+          const botonesDiv = document.createElement('div');
+          botonesDiv.className = 'mov-acciones-botones';
+          botonesDiv.style.justifyContent = 'flex-end';
+          botonesDiv.style.width = '100%';
 
-        if (!m.cumplida) {
-          const btnAbonar = document.createElement('button');
-          btnAbonar.type = 'button';
-          btnAbonar.className = 'btn-mini ok';
-          btnAbonar.textContent = 'Abonar';
-          btnAbonar.addEventListener('click', () => activarAbonoMeta(accionesDiv, m));
-          botonesDiv.appendChild(btnAbonar);
+          if (!m.cumplida) {
+            const btnAbonar = document.createElement('button');
+            btnAbonar.type = 'button';
+            btnAbonar.className = 'btn-mini ok';
+            btnAbonar.textContent = 'Abonar';
+            btnAbonar.addEventListener('click', () => activarAbonoMeta(accionesDiv, m));
+            botonesDiv.appendChild(btnAbonar);
+          }
+
+          const btnBorrar = document.createElement('button');
+          btnBorrar.type = 'button';
+          btnBorrar.className = 'btn-mini borrar';
+          btnBorrar.textContent = 'Eliminar';
+          btnBorrar.addEventListener('click', async () => {
+            if (!(await confirmarAccion('¿Eliminar esta meta?'))) return;
+            try {
+              const res = await eliminarMeta(m.id);
+              datos.metas = res.metas;
+              renderMetas(res.metas);
+            } catch (err) { alert(err.message); }
+          });
+          botonesDiv.appendChild(btnBorrar);
+
+          accionesDiv.appendChild(botonesDiv);
+          div.appendChild(accionesDiv);
         }
 
-        const btnBorrar = document.createElement('button');
-        btnBorrar.type = 'button';
-        btnBorrar.className = 'btn-mini borrar';
-        btnBorrar.textContent = 'Eliminar';
-        btnBorrar.addEventListener('click', async () => {
-          if (!(await confirmarAccion('¿Eliminar esta meta?'))) return;
-          try {
-            const res = await eliminarMeta(m.id);
-            datos.metas = res.metas;
-            renderMetas(res.metas);
-          } catch (err) { alert(err.message); }
-        });
-        botonesDiv.appendChild(btnBorrar);
-
-        accionesDiv.appendChild(botonesDiv);
-        div.appendChild(accionesDiv);
         cont.appendChild(div);
       });
     }
@@ -2189,14 +2270,13 @@
       const opPlaceholder = document.createElement('option');
       opPlaceholder.value = '';
       opPlaceholder.disabled = true;
-      opPlaceholder.selected = !meta.cuentaId;
+      opPlaceholder.selected = true;
       opPlaceholder.textContent = (datos.cuentas || []).length ? '¿En qué cuenta tienes esta plata?' : 'Primero crea una cuenta';
       selectCuenta.appendChild(opPlaceholder);
       (datos.cuentas || []).forEach(c => {
         const op = document.createElement('option');
         op.value = c.id;
         op.textContent = c.nombre;
-        if (c.id === meta.cuentaId) op.selected = true;
         selectCuenta.appendChild(op);
       });
 
@@ -2277,6 +2357,13 @@
       document.getElementById('btn-editar-movimientos').textContent = modoEdicionMovimientos ? 'Listo' : 'Editar';
       document.getElementById('btn-editar-movimientos').classList.toggle('ok', modoEdicionMovimientos);
       renderMovimientos(datos.movimientos);
+    });
+
+    document.getElementById('btn-editar-metas').addEventListener('click', () => {
+      modoEdicionMetas = !modoEdicionMetas;
+      document.getElementById('btn-editar-metas').textContent = modoEdicionMetas ? 'Listo' : 'Editar';
+      document.getElementById('btn-editar-metas').classList.toggle('ok', modoEdicionMetas);
+      renderMetas(datos.metas);
     });
 
     function renderMovimientos(lista) {
