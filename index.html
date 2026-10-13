@@ -820,6 +820,21 @@
         </div>
       </div>
 
+      <div class="block">
+        <div class="block-header-fila">
+          <h2><svg class="ico"><use href="#i-trending"/></svg> Metas de ahorro</h2>
+          <button id="btn-nueva-meta" type="button" class="btn-mini">Nueva meta</button>
+        </div>
+        <form id="form-meta" style="display:none; flex-direction:column; gap:12px; margin-bottom:16px;">
+          <div class="field"><label>Nombre</label><input type="text" id="meta-nombre" placeholder="Ej: Moto" required></div>
+          <div class="field"><label>Monto objetivo</label><input type="text" id="meta-monto" placeholder="0" required></div>
+          <div class="field"><label>Fecha límite (opcional)</label><input type="date" id="meta-fecha"></div>
+          <button type="submit" class="primario">Crear meta</button>
+          <p id="msg-meta" class="msg error" style="display:none;"></p>
+        </form>
+        <div id="lista-metas"></div>
+      </div>
+
       <div class="mes-selector-row">
         <label for="selector-mes"><svg class="ico"><use href="#i-calendar"/></svg> Movimientos de</label>
         <select id="selector-mes"></select>
@@ -1199,7 +1214,7 @@
     document.getElementById('gasto-fecha').value = hoy;
     document.getElementById('ingreso-fecha').value = hoy;
 
-    ['gasto-monto', 'ingreso-monto', 'cuenta-saldo', 'deuda-monto', 'cobrar-monto'].forEach(id => {
+    ['gasto-monto', 'ingreso-monto', 'cuenta-saldo', 'deuda-monto', 'cobrar-monto', 'meta-monto'].forEach(id => {
       activarFormatoMonto(document.getElementById(id));
     });
 
@@ -1401,12 +1416,12 @@
       };
     }
 
-    async function agregarGasto(fecha, categoria, descripcion, monto, cuentaId, deudaId) {
+    async function agregarGasto(fecha, categoria, descripcion, monto, cuentaId, deudaId, metaId) {
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
       const { error } = await sb.from('gastos').insert({
         fecha, categoria, descripcion, monto: Number(monto) || 0,
         cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta,
-        deuda_id: deudaId || null
+        deuda_id: deudaId || null, meta_id: metaId || null
       });
       if (error) throw error;
       await ajustarSaldoCuenta_(cuentaId, -(Number(monto) || 0));
@@ -1472,13 +1487,14 @@
      *  si venía de un abono a una deuda, también le resta ese monto a lo
      *  ya abonado (para que vuelva a quedar pendiente). */
     async function eliminarGasto(id) {
-      const { data: fila } = await sb.from('gastos').select('monto, cuenta_id, deuda_id').eq('id', id).maybeSingle();
+      const { data: fila } = await sb.from('gastos').select('monto, cuenta_id, deuda_id, meta_id').eq('id', id).maybeSingle();
       await sb.from('gastos').delete().eq('id', id);
       if (fila) {
         await ajustarSaldoCuenta_(fila.cuenta_id, Number(fila.monto) || 0);
         if (fila.deuda_id) await ajustarAbonoDeuda_(fila.deuda_id, -(Number(fila.monto) || 0));
+        if (fila.meta_id) await ajustarAbonoMeta_(fila.meta_id, -(Number(fila.monto) || 0));
       }
-      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas() };
+      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas(), metas: await getMetas() };
     }
 
     /** Edita un ingreso ya guardado: primero revierte el efecto que tenía
@@ -1505,7 +1521,7 @@
 
     /** Simétrico a editarIngreso, para gastos. */
     async function editarGasto(id, fecha, categoria, descripcion, monto, cuentaId) {
-      const { data: original } = await sb.from('gastos').select('monto, cuenta_id, deuda_id').eq('id', id).maybeSingle();
+      const { data: original } = await sb.from('gastos').select('monto, cuenta_id, deuda_id, meta_id').eq('id', id).maybeSingle();
       if (!original) return { ok: false, error: 'No se encontró el gasto' };
       await ajustarSaldoCuenta_(original.cuenta_id, Number(original.monto) || 0);
       const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
@@ -1519,7 +1535,11 @@
         const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
         await ajustarAbonoDeuda_(original.deuda_id, delta);
       }
-      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas() };
+      if (original.meta_id) {
+        const delta = (Number(monto) || 0) - (Number(original.monto) || 0);
+        await ajustarAbonoMeta_(original.meta_id, delta);
+      }
+      return { ok: true, cuentas: await getCuentas(), deudas: await getDeudas(), metas: await getMetas() };
     }
 
     async function listarMesesDisponibles() {
@@ -1771,13 +1791,73 @@
       return { ok: true, porCobrar: await getPorCobrar() };
     }
 
+    /* =========================================================
+     * METAS DE AHORRO
+     * ========================================================= */
+
+    async function getMetas() {
+      const { data, error } = await sb.from('metas').select('id, nombre, monto_objetivo, monto_ahorrado, fecha_objetivo, cumplida, creado_en').order('creado_en', { ascending: false });
+      if (error) throw error;
+      return (data || []).map(m => ({
+        id: m.id, nombre: m.nombre,
+        montoObjetivo: Number(m.monto_objetivo) || 0,
+        montoAhorrado: Number(m.monto_ahorrado) || 0,
+        fechaObjetivo: m.fecha_objetivo,
+        cumplida: m.cumplida
+      }));
+    }
+
+    async function agregarMeta(nombre, montoObjetivo, fechaObjetivo) {
+      const { error } = await sb.from('metas').insert({
+        nombre: (nombre || '').trim(),
+        monto_objetivo: Number(montoObjetivo) || 0,
+        fecha_objetivo: fechaObjetivo || null
+      });
+      if (error) throw error;
+      return { ok: true, metas: await getMetas() };
+    }
+
+    async function eliminarMeta(id) {
+      await sb.from('metas').delete().eq('id', id);
+      return { ok: true, metas: await getMetas() };
+    }
+
+    /** Abona a una meta: genera un gasto real (el dinero sale de una
+     *  cuenta, igual que pagar una deuda) vinculado a la meta, y suma
+     *  ese monto a lo ya ahorrado. Se marca cumplida al llegar al 100%. */
+    async function abonarMeta(id, montoAbono, cuentaId) {
+      const { data: meta } = await sb.from('metas').select('nombre, monto_objetivo, monto_ahorrado').eq('id', id).maybeSingle();
+      if (!meta) return { ok: false, error: 'No se encontró la meta' };
+      const abono = Number(montoAbono) || 0;
+      const nuevoMontoAhorrado = (Number(meta.monto_ahorrado) || 0) + abono;
+      const cumplida = nuevoMontoAhorrado >= (Number(meta.monto_objetivo) || 0);
+      await sb.from('metas').update({ monto_ahorrado: nuevoMontoAhorrado, cumplida }).eq('id', id);
+      await agregarGasto(
+        new Date().toISOString().split('T')[0], 'Ahorro para metas',
+        'Ahorro: ' + meta.nombre, abono, cuentaId, null, id
+      );
+      return { ok: true, metas: await getMetas(), cuentas: await getCuentas() };
+    }
+
+    /** Suma (o resta, con delta negativo) a lo ahorrado de una meta —
+     *  usada al revertir un abono eliminado o ajustar uno editado,
+     *  igual que ajustarAbonoDeuda_. */
+    async function ajustarAbonoMeta_(metaId, delta) {
+      if (!metaId || !delta) return;
+      const { data: meta } = await sb.from('metas').select('monto_objetivo, monto_ahorrado').eq('id', metaId).maybeSingle();
+      if (!meta) return;
+      const nuevoMontoAhorrado = Math.max((Number(meta.monto_ahorrado) || 0) + delta, 0);
+      const cumplida = nuevoMontoAhorrado >= (Number(meta.monto_objetivo) || 0) && (Number(meta.monto_objetivo) || 0) > 0;
+      await sb.from('metas').update({ monto_ahorrado: nuevoMontoAhorrado, cumplida }).eq('id', metaId);
+    }
+
     async function getDatosIniciales() {
       const mesActual = claveMes_();
-      const [categorias, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial] = await Promise.all([
+      const [categorias, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial, metas] = await Promise.all([
         sembrarCategoriasSiVacio_(), listarMesesDisponibles(), getResumenMensual(mesActual),
-        getMovimientosDeMes(mesActual), getDeudas(), getCuentas(), getPorCobrar(), getHistorialMensual(6)
+        getMovimientosDeMes(mesActual), getDeudas(), getCuentas(), getPorCobrar(), getHistorialMensual(6), getMetas()
       ]);
-      return { categorias, mesActual, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial };
+      return { categorias, mesActual, mesesDisponibles, resumen, movimientos, deudas, cuentas, porCobrar, historial, metas };
     }
 
     async function getResumenPorMes(mesKey) {
@@ -1814,6 +1894,7 @@
       renderPorCobrar(d.porCobrar);
       renderCuentas(d.cuentas);
       renderCuentasSelect();
+      renderMetas(d.metas);
       sincronizarNotificaciones_(d.deudas, d.porCobrar);
     }
 
@@ -1943,6 +2024,176 @@
       });
     }
 
+    function renderMetas(lista) {
+      const cont = document.getElementById('lista-metas');
+      cont.innerHTML = '';
+      if (!lista || lista.length === 0) {
+        cont.innerHTML = '<p class="sin-datos">No tienes metas todavía.</p>';
+        return;
+      }
+      lista.forEach(m => {
+        const porcentaje = m.montoObjetivo > 0 ? Math.min((m.montoAhorrado / m.montoObjetivo) * 100, 100) : 0;
+        const fechaTxt = m.fechaObjetivo
+          ? new Date(m.fechaObjetivo).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+          : '';
+
+        const div = document.createElement('div');
+        div.className = 'mov-row';
+        div.style.flexDirection = 'column';
+        div.style.alignItems = 'stretch';
+        if (m.cumplida) div.style.opacity = '0.6';
+
+        const infoDiv = document.createElement('div');
+        infoDiv.style.width = '100%';
+        infoDiv.innerHTML = `
+          <div class="bar-top"><span class="cat-name">${m.nombre}${m.cumplida ? ' ✓' : ''}</span><span class="cat-amt mono">${formatoMoneda(m.montoAhorrado)} de ${formatoMoneda(m.montoObjetivo)}</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${porcentaje}%; background:var(--money);"></div></div>
+          ${fechaTxt ? '<div class="mov-meta" style="margin-top:4px;">Meta: ' + fechaTxt + '</div>' : ''}
+        `;
+
+        const accionesDiv = document.createElement('div');
+        accionesDiv.className = 'mov-acciones';
+        accionesDiv.style.width = '100%';
+        accionesDiv.style.marginTop = '10px';
+
+        const botonesDiv = document.createElement('div');
+        botonesDiv.className = 'mov-acciones-botones';
+        botonesDiv.style.justifyContent = 'flex-end';
+        botonesDiv.style.width = '100%';
+
+        if (!m.cumplida) {
+          const btnAbonar = document.createElement('button');
+          btnAbonar.type = 'button';
+          btnAbonar.className = 'btn-mini ok';
+          btnAbonar.textContent = 'Abonar';
+          btnAbonar.addEventListener('click', () => activarAbonoMeta(accionesDiv, m));
+          botonesDiv.appendChild(btnAbonar);
+        }
+
+        const btnBorrar = document.createElement('button');
+        btnBorrar.type = 'button';
+        btnBorrar.className = 'btn-mini borrar';
+        btnBorrar.textContent = 'Eliminar';
+        btnBorrar.addEventListener('click', async () => {
+          if (!(await confirmarAccion('¿Eliminar esta meta?'))) return;
+          try {
+            const res = await eliminarMeta(m.id);
+            datos.metas = res.metas;
+            renderMetas(res.metas);
+          } catch (err) { alert(err.message); }
+        });
+        botonesDiv.appendChild(btnBorrar);
+
+        accionesDiv.appendChild(botonesDiv);
+        div.appendChild(infoDiv);
+        div.appendChild(accionesDiv);
+        cont.appendChild(div);
+      });
+    }
+
+    /** Reemplaza los botones de una meta por el formulario de abono en
+     *  línea — mismo patrón que activarAbonoDeuda. */
+    function activarAbonoMeta(accionesDiv, meta) {
+      accionesDiv.innerHTML = '';
+
+      const inputMonto = document.createElement('input');
+      inputMonto.min = '0';
+      inputMonto.className = 'mono';
+      inputMonto.style.cssText = 'width:100px; background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.9rem; padding:4px 2px; text-align:right;';
+      activarFormatoMonto(inputMonto);
+
+      const selectCuenta = document.createElement('select');
+      selectCuenta.className = 'mono';
+      selectCuenta.style.cssText = 'background:transparent; border:none; border-bottom:1px solid var(--line-strong); color:var(--paper); font-size:0.78rem; padding:4px 2px; margin-top:6px;';
+      const opPlaceholder = document.createElement('option');
+      opPlaceholder.value = '';
+      opPlaceholder.disabled = true;
+      opPlaceholder.selected = true;
+      opPlaceholder.textContent = (datos.cuentas || []).length ? 'Selecciona una cuenta' : 'Primero crea una cuenta';
+      selectCuenta.appendChild(opPlaceholder);
+      (datos.cuentas || []).forEach(c => {
+        const op = document.createElement('option');
+        op.value = c.id;
+        op.textContent = c.nombre;
+        selectCuenta.appendChild(op);
+      });
+
+      const botonesDiv = document.createElement('div');
+      botonesDiv.className = 'mov-acciones-botones';
+      botonesDiv.style.justifyContent = 'flex-end';
+      botonesDiv.style.marginTop = '6px';
+
+      const btnConfirmar = document.createElement('button');
+      btnConfirmar.type = 'button';
+      btnConfirmar.className = 'btn-mini ok';
+      btnConfirmar.textContent = 'Confirmar abono';
+      btnConfirmar.addEventListener('click', async () => {
+        if (btnConfirmar.disabled) return;
+        const monto = leerMonto(inputMonto);
+        if (monto <= 0) { mostrarMensaje('msg-meta', 'Pon un monto mayor a cero', 'error'); return; }
+        if (!selectCuenta.value) { mostrarMensaje('msg-meta', 'Selecciona de qué cuenta sale el ahorro', 'error'); return; }
+        btnConfirmar.disabled = true;
+        btnConfirmar.textContent = 'Guardando...';
+        try {
+          const res = await abonarMeta(meta.id, monto, selectCuenta.value);
+          datos.metas = res.metas;
+          datos.cuentas = res.cuentas;
+          renderMetas(res.metas);
+          renderCuentas(res.cuentas);
+          renderCuentasSelect();
+          cargarResumenDeMes(mesSeleccionado);
+        } catch (err) {
+          mostrarMensaje('msg-meta', err.message, 'error');
+          btnConfirmar.disabled = false;
+          btnConfirmar.textContent = 'Confirmar abono';
+        }
+      });
+
+      const btnCancelar = document.createElement('button');
+      btnCancelar.type = 'button';
+      btnCancelar.className = 'btn-mini';
+      btnCancelar.textContent = 'Cancelar';
+      btnCancelar.addEventListener('click', () => renderMetas(datos.metas));
+
+      botonesDiv.appendChild(btnConfirmar);
+      botonesDiv.appendChild(btnCancelar);
+      accionesDiv.appendChild(inputMonto);
+      accionesDiv.appendChild(selectCuenta);
+      accionesDiv.appendChild(botonesDiv);
+      inputMonto.focus();
+    }
+
+    document.getElementById('btn-nueva-meta').addEventListener('click', () => {
+      const form = document.getElementById('form-meta');
+      const mostrando = form.style.display === 'flex';
+      form.style.display = mostrando ? 'none' : 'flex';
+      document.getElementById('btn-nueva-meta').textContent = mostrando ? 'Nueva meta' : 'Cancelar';
+    });
+
+    document.getElementById('form-meta').addEventListener('submit', async e => {
+      e.preventDefault();
+      const nombre = document.getElementById('meta-nombre').value.trim();
+      const monto = leerMonto(document.getElementById('meta-monto'));
+      const fecha = document.getElementById('meta-fecha').value;
+      if (!nombre || monto <= 0) {
+        mostrarMensaje('msg-meta', 'Pon un nombre y un monto mayor a cero', 'error');
+        return;
+      }
+      const btnSubmit = e.target.querySelector('button[type="submit"]');
+      if (btnSubmit.disabled) return;
+      btnSubmit.disabled = true;
+      try {
+        const res = await agregarMeta(nombre, monto, fecha);
+        datos.metas = res.metas;
+        renderMetas(res.metas);
+        mostrarMensaje('msg-meta', 'Meta creada', 'ok');
+        e.target.reset();
+        e.target.style.display = 'none';
+        document.getElementById('btn-nueva-meta').textContent = 'Nueva meta';
+      } catch (err) { mostrarMensaje('msg-meta', err.message, 'error'); }
+      finally { btnSubmit.disabled = false; }
+    });
+
     document.getElementById('btn-editar-movimientos').addEventListener('click', () => {
       modoEdicionMovimientos = !modoEdicionMovimientos;
       document.getElementById('btn-editar-movimientos').textContent = modoEdicionMovimientos ? 'Listo' : 'Editar';
@@ -2004,6 +2255,10 @@
               if (m.tipo === 'gasto' && res.deudas) {
                 datos.deudas = res.deudas;
                 renderDeudas(res.deudas);
+              }
+              if (m.tipo === 'gasto' && res.metas) {
+                datos.metas = res.metas;
+                renderMetas(res.metas);
               }
               if (m.tipo === 'ingreso' && res.porCobrar) {
                 datos.porCobrar = res.porCobrar;
@@ -2117,6 +2372,10 @@
           if (esGasto && res.deudas) {
             datos.deudas = res.deudas;
             renderDeudas(res.deudas);
+          }
+          if (esGasto && res.metas) {
+            datos.metas = res.metas;
+            renderMetas(res.metas);
           }
           if (!esGasto && res.porCobrar) {
             datos.porCobrar = res.porCobrar;
