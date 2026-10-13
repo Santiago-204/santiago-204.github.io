@@ -219,6 +219,55 @@
     .bar-fill { height: 100%; border-radius: 4px; }
     .sin-datos { color: var(--paper-faint); font-size: 0.85rem; }
 
+    /* ---------- Tarjetas de meta de ahorro ---------- */
+    .meta-card {
+      background: var(--surface-raised);
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+    }
+    .meta-card.cumplida { border-color: var(--money); }
+    .meta-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+    .meta-card-nombre { font-weight: 700; font-size: 1rem; color: var(--paper); }
+    .meta-card-pct { font-weight: 800; font-size: 1.4rem; color: var(--money); font-family: 'JetBrains Mono', monospace; }
+    .meta-card-track {
+      height: 14px;
+      background: rgba(128,128,128,0.15);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .meta-card-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--money);
+      transition: width 0.4s ease;
+    }
+    .meta-card-detalle {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--paper-dim);
+      margin-bottom: 4px;
+    }
+    .meta-card-fecha { font-size: 0.75rem; color: var(--paper-faint); margin-bottom: 10px; }
+    .meta-card-cumplida-tag {
+      display: inline-block;
+      background: var(--money);
+      color: var(--ink);
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+      margin-left: 8px;
+    }
+
     /* ---------- Histórico de varios meses ---------- */
     .historial-chart {
       display: flex;
@@ -795,6 +844,21 @@
 
     <!-- VISTA: RESUMEN (solo visualización — todo lo que tienes, sin importar el mes) -->
     <section id="vista-resumen" class="vista">
+      <div class="block">
+        <div class="block-header-fila">
+          <h2><svg class="ico"><use href="#i-trending"/></svg> Metas de ahorro</h2>
+          <button id="btn-nueva-meta" type="button" class="btn-mini">Nueva meta</button>
+        </div>
+        <form id="form-meta" style="display:none; flex-direction:column; gap:12px; margin-bottom:16px;">
+          <div class="field"><label>Nombre</label><input type="text" id="meta-nombre" placeholder="Ej: Moto" required></div>
+          <div class="field"><label>Monto objetivo</label><input type="text" id="meta-monto" placeholder="0" required></div>
+          <div class="field"><label>Fecha límite (opcional)</label><input type="date" id="meta-fecha"></div>
+          <button type="submit" class="primario">Crear meta</button>
+          <p id="msg-meta" class="msg error" style="display:none;"></p>
+        </form>
+        <div id="lista-metas"></div>
+      </div>
+
       <div class="hero">
         <span class="hero-label"><svg class="ico"><use href="#i-bank"/></svg> Total en tus cuentas</span>
         <div class="hero-amount mono" id="r-total-cuentas" style="color: var(--cuentas);">$0</div>
@@ -818,21 +882,6 @@
           <span><span class="dot dot-money"></span>Ingresos</span>
           <span><span class="dot dot-spend"></span>Gastos</span>
         </div>
-      </div>
-
-      <div class="block">
-        <div class="block-header-fila">
-          <h2><svg class="ico"><use href="#i-trending"/></svg> Metas de ahorro</h2>
-          <button id="btn-nueva-meta" type="button" class="btn-mini">Nueva meta</button>
-        </div>
-        <form id="form-meta" style="display:none; flex-direction:column; gap:12px; margin-bottom:16px;">
-          <div class="field"><label>Nombre</label><input type="text" id="meta-nombre" placeholder="Ej: Moto" required></div>
-          <div class="field"><label>Monto objetivo</label><input type="text" id="meta-monto" placeholder="0" required></div>
-          <div class="field"><label>Fecha límite (opcional)</label><input type="date" id="meta-fecha"></div>
-          <button type="submit" class="primario">Crear meta</button>
-          <p id="msg-meta" class="msg error" style="display:none;"></p>
-        </form>
-        <div id="lista-metas"></div>
       </div>
 
       <div class="mes-selector-row">
@@ -1796,14 +1845,16 @@
      * ========================================================= */
 
     async function getMetas() {
-      const { data, error } = await sb.from('metas').select('id, nombre, monto_objetivo, monto_ahorrado, fecha_objetivo, cumplida, creado_en').order('creado_en', { ascending: false });
+      const { data, error } = await sb.from('metas').select('id, nombre, monto_objetivo, monto_ahorrado, fecha_objetivo, cumplida, creado_en, cuenta_id, cuenta_nombre').order('creado_en', { ascending: false });
       if (error) throw error;
       return (data || []).map(m => ({
         id: m.id, nombre: m.nombre,
         montoObjetivo: Number(m.monto_objetivo) || 0,
         montoAhorrado: Number(m.monto_ahorrado) || 0,
         fechaObjetivo: m.fecha_objetivo,
-        cumplida: m.cumplida
+        cumplida: m.cumplida,
+        cuentaId: m.cuenta_id || '',
+        cuenta: m.cuenta_nombre || ''
       }));
     }
 
@@ -1822,21 +1873,22 @@
       return { ok: true, metas: await getMetas() };
     }
 
-    /** Abona a una meta: genera un gasto real (el dinero sale de una
-     *  cuenta, igual que pagar una deuda) vinculado a la meta, y suma
-     *  ese monto a lo ya ahorrado. Se marca cumplida al llegar al 100%. */
+    /** Abona a una meta: NO genera ningún movimiento real ni toca el
+     *  saldo de ninguna cuenta — solo suma al progreso ahorrado y guarda
+     *  en qué cuenta está esa plata, como referencia ("la tengo en Nu,
+     *  apartada para esto"). Se marca cumplida al llegar al 100%. */
     async function abonarMeta(id, montoAbono, cuentaId) {
-      const { data: meta } = await sb.from('metas').select('nombre, monto_objetivo, monto_ahorrado').eq('id', id).maybeSingle();
+      const { data: meta } = await sb.from('metas').select('monto_objetivo, monto_ahorrado').eq('id', id).maybeSingle();
       if (!meta) return { ok: false, error: 'No se encontró la meta' };
       const abono = Number(montoAbono) || 0;
       const nuevoMontoAhorrado = (Number(meta.monto_ahorrado) || 0) + abono;
       const cumplida = nuevoMontoAhorrado >= (Number(meta.monto_objetivo) || 0);
-      await sb.from('metas').update({ monto_ahorrado: nuevoMontoAhorrado, cumplida }).eq('id', id);
-      await agregarGasto(
-        new Date().toISOString().split('T')[0], 'Ahorro para metas',
-        'Ahorro: ' + meta.nombre, abono, cuentaId, null, id
-      );
-      return { ok: true, metas: await getMetas(), cuentas: await getCuentas() };
+      const nombreCuenta = await obtenerNombreCuenta_(cuentaId);
+      await sb.from('metas').update({
+        monto_ahorrado: nuevoMontoAhorrado, cumplida,
+        cuenta_id: cuentaId || null, cuenta_nombre: nombreCuenta
+      }).eq('id', id);
+      return { ok: true, metas: await getMetas() };
     }
 
     /** Suma (o resta, con delta negativo) a lo ahorrado de una meta —
@@ -2028,33 +2080,63 @@
       const cont = document.getElementById('lista-metas');
       cont.innerHTML = '';
       if (!lista || lista.length === 0) {
-        cont.innerHTML = '<p class="sin-datos">No tienes metas todavía.</p>';
+        cont.innerHTML = '<p class="sin-datos">No tienes metas todavía — crea una y ve tu progreso aquí.</p>';
         return;
       }
       lista.forEach(m => {
         const porcentaje = m.montoObjetivo > 0 ? Math.min((m.montoAhorrado / m.montoObjetivo) * 100, 100) : 0;
-        const fechaTxt = m.fechaObjetivo
-          ? new Date(m.fechaObjetivo).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
-          : '';
+        const faltante = Math.max(m.montoObjetivo - m.montoAhorrado, 0);
+
+        let fechaTxt = '';
+        if (m.fechaObjetivo) {
+          const fecha = new Date(m.fechaObjetivo + 'T00:00:00');
+          const dias = Math.ceil((fecha - new Date()) / 86400000);
+          const fechaLegible = fecha.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
+          fechaTxt = dias >= 0 ? `Meta: ${fechaLegible} (faltan ${dias} días)` : `Meta: ${fechaLegible} (vencida)`;
+        }
 
         const div = document.createElement('div');
-        div.className = 'mov-row';
-        div.style.flexDirection = 'column';
-        div.style.alignItems = 'stretch';
-        if (m.cumplida) div.style.opacity = '0.6';
+        div.className = 'meta-card' + (m.cumplida ? ' cumplida' : '');
 
-        const infoDiv = document.createElement('div');
-        infoDiv.style.width = '100%';
-        infoDiv.innerHTML = `
-          <div class="bar-top"><span class="cat-name">${m.nombre}${m.cumplida ? ' ✓' : ''}</span><span class="cat-amt mono">${formatoMoneda(m.montoAhorrado)} de ${formatoMoneda(m.montoObjetivo)}</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${porcentaje}%; background:var(--money);"></div></div>
-          ${fechaTxt ? '<div class="mov-meta" style="margin-top:4px;">Meta: ' + fechaTxt + '</div>' : ''}
+        const top = document.createElement('div');
+        top.className = 'meta-card-top';
+        top.innerHTML = `
+          <span class="meta-card-nombre">${m.nombre}${m.cumplida ? '<span class="meta-card-cumplida-tag">Lista ✓</span>' : ''}</span>
+          <span class="meta-card-pct">${Math.round(porcentaje)}%</span>
         `;
+
+        const track = document.createElement('div');
+        track.className = 'meta-card-track';
+        track.innerHTML = `<div class="meta-card-fill" style="width:${porcentaje}%;"></div>`;
+
+        const detalle = document.createElement('div');
+        detalle.className = 'meta-card-detalle';
+        detalle.innerHTML = `
+          <span>${formatoMoneda(m.montoAhorrado)} ahorrados</span>
+          <span>${m.cumplida ? '¡Meta cumplida!' : 'Faltan ' + formatoMoneda(faltante)}</span>
+        `;
+
+        div.appendChild(top);
+        div.appendChild(track);
+        div.appendChild(detalle);
+
+        if (fechaTxt) {
+          const fechaDiv = document.createElement('div');
+          fechaDiv.className = 'meta-card-fecha';
+          fechaDiv.textContent = fechaTxt;
+          div.appendChild(fechaDiv);
+        }
+
+        if (m.cuenta && m.montoAhorrado > 0) {
+          const cuentaDiv = document.createElement('div');
+          cuentaDiv.className = 'meta-card-fecha';
+          cuentaDiv.innerHTML = '<svg class="ico ico-mini"><use href="#i-bank"/></svg> Apartada en ' + m.cuenta;
+          div.appendChild(cuentaDiv);
+        }
 
         const accionesDiv = document.createElement('div');
         accionesDiv.className = 'mov-acciones';
         accionesDiv.style.width = '100%';
-        accionesDiv.style.marginTop = '10px';
 
         const botonesDiv = document.createElement('div');
         botonesDiv.className = 'mov-acciones-botones';
@@ -2085,7 +2167,6 @@
         botonesDiv.appendChild(btnBorrar);
 
         accionesDiv.appendChild(botonesDiv);
-        div.appendChild(infoDiv);
         div.appendChild(accionesDiv);
         cont.appendChild(div);
       });
@@ -2108,13 +2189,14 @@
       const opPlaceholder = document.createElement('option');
       opPlaceholder.value = '';
       opPlaceholder.disabled = true;
-      opPlaceholder.selected = true;
-      opPlaceholder.textContent = (datos.cuentas || []).length ? 'Selecciona una cuenta' : 'Primero crea una cuenta';
+      opPlaceholder.selected = !meta.cuentaId;
+      opPlaceholder.textContent = (datos.cuentas || []).length ? '¿En qué cuenta tienes esta plata?' : 'Primero crea una cuenta';
       selectCuenta.appendChild(opPlaceholder);
       (datos.cuentas || []).forEach(c => {
         const op = document.createElement('option');
         op.value = c.id;
         op.textContent = c.nombre;
+        if (c.id === meta.cuentaId) op.selected = true;
         selectCuenta.appendChild(op);
       });
 
@@ -2126,26 +2208,22 @@
       const btnConfirmar = document.createElement('button');
       btnConfirmar.type = 'button';
       btnConfirmar.className = 'btn-mini ok';
-      btnConfirmar.textContent = 'Confirmar abono';
+      btnConfirmar.textContent = 'Confirmar';
       btnConfirmar.addEventListener('click', async () => {
         if (btnConfirmar.disabled) return;
         const monto = leerMonto(inputMonto);
         if (monto <= 0) { mostrarMensaje('msg-meta', 'Pon un monto mayor a cero', 'error'); return; }
-        if (!selectCuenta.value) { mostrarMensaje('msg-meta', 'Selecciona de qué cuenta sale el ahorro', 'error'); return; }
+        if (!selectCuenta.value) { mostrarMensaje('msg-meta', 'Indica en qué cuenta tienes esa plata', 'error'); return; }
         btnConfirmar.disabled = true;
         btnConfirmar.textContent = 'Guardando...';
         try {
           const res = await abonarMeta(meta.id, monto, selectCuenta.value);
           datos.metas = res.metas;
-          datos.cuentas = res.cuentas;
           renderMetas(res.metas);
-          renderCuentas(res.cuentas);
-          renderCuentasSelect();
-          cargarResumenDeMes(mesSeleccionado);
         } catch (err) {
           mostrarMensaje('msg-meta', err.message, 'error');
           btnConfirmar.disabled = false;
-          btnConfirmar.textContent = 'Confirmar abono';
+          btnConfirmar.textContent = 'Confirmar';
         }
       });
 
